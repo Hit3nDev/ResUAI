@@ -1,0 +1,72 @@
+# ═══════════════════════════════════════════════════════
+#  ResUAI — .gitignore
+#  DO NOT remove any line from this file.
+#  These exclusions prevent secrets and build artifacts
+#  from being committed to version control.
+# ═══════════════════════════════════════════════════════
+
+# ── Environment / Secrets (CRITICAL — never commit these) ────────────────────
+.env
+.env.local
+.env.production
+.env.staging
+.env.development.local
+.env.test.local
+.env.production.local
+
+# ── Database files ───────────────────────────────────────────────────────────
+*.db
+*.sqlite
+*.sqlite3
+
+# ── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ── Virtual environments ─────────────────────────────────────────────────────
+venv/
+.venv/
+env/
+ENV/
+
+# ── Uploaded files (user data — should NOT be committed) ─────────────────────
+backend/uploads/*
+!backend/uploads/.gitkeep
+
+# ── Node / Next.js ───────────────────────────────────────────────────────────
+node_modules/
+.next/
+out/
+dist/
+.turbo/
+.vercel/
+
+# ── OS / Editor ──────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
