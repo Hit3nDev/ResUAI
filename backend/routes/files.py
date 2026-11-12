@@ -1,34 +1,46 @@
-"""routes/files.py"""
+"""routes/files.py — collection routes accept both /files and /files/ (see history.py)."""
+import sys, os
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.responses import Response
-import sys, os
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from database import get_all_files, get_file_bytes, delete_file_record, save_file, format_file_size
-from file_parser import extract_text_from_upload
+from database import (
+    get_all_files, get_file_by_id, get_file_bytes, delete_file_record, save_file, format_file_size,
+)
+from downloads import safe_filename
+from file_parser import extract_text_from_bytes
 
 router = APIRouter()
 
-@router.get("/")
+
+@router.get("")
+@router.get("/", include_in_schema=False)
 async def list_files():
     files = get_all_files()
     for f in files:
         f["size_human"] = format_file_size(f["file_size"])
     return files
 
+
 @router.delete("/{file_id}")
 async def delete_file(file_id: int):
     delete_file_record(file_id)
     return {"ok": True}
 
+
 @router.get("/{file_id}/download")
 async def download_file(file_id: int):
-    from database import get_all_files
-    all_f = get_all_files()
-    found = next((f for f in all_f if f["id"] == file_id), None)
-    if not found: raise HTTPException(404, "File not found")
+    found = get_file_by_id(file_id)
+    if not found:
+        raise HTTPException(404, "File not found")
     data = get_file_bytes(found["stored_name"])
-    if not data: raise HTTPException(404, "File data not found")
-    return Response(content=data, headers={"Content-Disposition": f'attachment; filename="{found["filename"]}"'})
+    if data is None:
+        raise HTTPException(404, "File data not found")
+    media = found.get("file_type") or "application/octet-stream"
+    fname = safe_filename(found["filename"], "download")
+    return Response(content=data, media_type=media,
+                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
 
 @router.post("/upload")
 async def upload_file(
@@ -36,18 +48,16 @@ async def upload_file(
     purpose: str = Form("upload"),
 ):
     contents = await file.read()
-    record = save_file(contents, file.filename, file.content_type or "application/octet-stream", purpose=purpose)
-    return record
+    return save_file(contents, safe_filename(file.filename, "upload"),
+                     file.content_type or "application/octet-stream", purpose=purpose)
+
 
 @router.post("/extract-text")
 async def extract_text(file: UploadFile = File(...)):
     contents = await file.read()
-    class _FU:
-        name = file.filename
-        def read(self_): return contents
     try:
-        text = extract_text_from_upload(_FU())
-        save_file(contents, file.filename, file.content_type or "", purpose="resume_input")
-        return {"text": text, "word_count": len(text.split()), "filename": file.filename}
-    except Exception as e:
+        text = extract_text_from_bytes(file.filename or "", contents)
+    except ValueError as e:
         raise HTTPException(400, str(e))
+    save_file(contents, safe_filename(file.filename, "resume"), file.content_type or "", purpose="resume_input")
+    return {"text": text, "word_count": len(text.split()), "filename": file.filename}

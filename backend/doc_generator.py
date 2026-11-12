@@ -22,6 +22,7 @@ The AI always outputs plain text with:
 import io
 import re
 from datetime import datetime
+from xml.sax.saxutils import escape as _xml_escape
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -29,7 +30,7 @@ from datetime import datetime
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # Indigo accent — matches reference template
-COLOR_ACCENT  = (0x4F, 0x46, 0xE5)   # #4F46E5
+COLOR_ACCENT  = (0x23, 0x40, 0xF5)   # #2340F5 (matches the app's cobalt)
 COLOR_DARK    = (0x0F, 0x14, 0x1F)   # near-black
 COLOR_BODY    = (0x1F, 0x2A, 0x3A)   # dark navy
 COLOR_GREY    = (0x6B, 0x72, 0x80)   # metadata / contact
@@ -55,6 +56,35 @@ _RE_SECTION = re.compile(r'^[A-Z][A-Z0-9\s&\/\-,]{2,39}$')
 # ═══════════════════════════════════════════════════════════════════════════════
 #  PARSER — shared between DOCX and PDF
 # ═══════════════════════════════════════════════════════════════════════════════
+
+_RE_CONTROL = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]')
+
+# Glyphs the PDF base fonts (WinAnsi) cannot draw -> safe lookalikes
+_GLYPH_MAP = {
+    '→': '->', '←': '<-', '✓': 'v', '✔': 'v', '●': '•',
+    '▪': '•', '◦': '•', '‑': '-', '−': '-', ' ': ' ',
+    '​': '', '﻿': '',
+}
+
+
+def clean_text(text: str) -> str:
+    """Normalise AI output before parsing: strip XML-illegal control chars, markdown emphasis, odd glyphs."""
+    text = (text or '').replace('\r\n', '\n').replace('\r', '\n')
+    text = _RE_CONTROL.sub('', text)
+    for k, v in _GLYPH_MAP.items():
+        text = text.replace(k, v)
+    out = []
+    for ln in text.split('\n'):
+        ln = re.sub(r'\*\*(.+?)\*\*', r'\1', ln)      # **bold** -> bold
+        ln = re.sub(r'^\s*#{1,6}\s+', '', ln)         # "## HEADING" -> "HEADING"
+        out.append(ln)
+    return '\n'.join(out)
+
+
+def _p(text: str) -> str:
+    """Escape text for ReportLab Paragraph markup (&, <, >)."""
+    return _xml_escape(text or '')
+
 
 def _is_section_header(s: str) -> bool:
     s = s.strip()
@@ -168,7 +198,7 @@ def parse_resume(resume_text: str) -> list[Token]:
     Called by both generate_docx() and generate_pdf() so formatting
     logic is shared and consistent.
     """
-    raw_lines = resume_text.strip().split('\n')
+    raw_lines = clean_text(resume_text).strip().split('\n')
     lines = [ln.rstrip() for ln in raw_lines]
 
     tokens: list[Token] = []
@@ -231,13 +261,18 @@ def parse_resume(resume_text: str) -> list[Token]:
             tokens.append(Token('skill', s))
             continue
 
+        # ── PROSE SECTIONS — free text is never an entry heading ──────
+        if current_sec and any(w in current_sec for w in ('SUMMARY', 'OBJECTIVE', 'PROFILE', 'ABOUT')):
+            tokens.append(Token('body', s))
+            continue
+
         # ── ENTRY DETECTION (EXPERIENCE / PROJECTS / EDUCATION) ────────
         # We try to detect "Company / Date" and "Role / Location" lines.
 
         lk = last_kind()
 
         # If this line itself contains a date → entry_head
-        if _has_date(s) and current_sec:
+        if _has_date(s) and current_sec and len(s) <= 100:
             left, right = _split_at_date(s)
             tokens.append(Token('entry_head', left or s, right))
             continue
@@ -301,7 +336,7 @@ def generate_docx(resume_text: str, candidate_name: str = "Resume") -> bytes:
     normal.font.size = Pt(10.5)
 
     # ── Helper: add a bottom-border HR paragraph ─────────────────────────
-    def _add_hr(color_hex: str = '4F46E5'):
+    def _add_hr(color_hex: str = '2340F5'):
         p = doc.add_paragraph()
         p.paragraph_format.space_before = Pt(0)
         p.paragraph_format.space_after  = Pt(0)
@@ -540,7 +575,7 @@ def generate_pdf(resume_text: str, candidate_name: str = "Resume") -> bytes:
     )
 
     # ── Color palette ────────────────────────────────────────────────────
-    C_ACCENT = colors.HexColor('#4F46E5')
+    C_ACCENT = colors.HexColor('#2340F5')
     C_DARK   = colors.HexColor('#0F141F')
     C_BODY   = colors.HexColor('#1F2A3A')
     C_GREY   = colors.HexColor('#6B7280')
@@ -679,8 +714,8 @@ def generate_pdf(resume_text: str, candidate_name: str = "Resume") -> bytes:
         right_text right-aligned on the same visual row.
         """
         tbl = Table(
-            [[Paragraph(left_text, left_style),
-              Paragraph(right_text, right_style)]],
+            [[Paragraph(_p(left_text), left_style),
+              Paragraph(_p(right_text), right_style)]],
             colWidths=[PAGE_W * 0.68, PAGE_W * 0.32],
         )
         tbl.setStyle(TableStyle([
@@ -696,7 +731,7 @@ def generate_pdf(resume_text: str, candidate_name: str = "Resume") -> bytes:
     def _bullet_para(text: str):
         # Use an em-dash bullet in accent color
         return Paragraph(
-            f'<font color="#4F46E5">•</font> {text}',
+            f'<font color="#2340F5">•</font> {_p(text)}',
             bullet_style,
         )
 
@@ -705,11 +740,11 @@ def generate_pdf(resume_text: str, candidate_name: str = "Resume") -> bytes:
         if ':' in text:
             label, _, values = text.partition(':')
             html = (
-                f'<b><font color="#0F141F">{label.strip()}:</font></b>'
-                f' <font color="#1F2A3A">{values.strip()}</font>'
+                f'<b><font color="#0F141F">{_p(label.strip())}:</font></b>'
+                f' <font color="#1F2A3A">{_p(values.strip())}</font>'
             )
             return Paragraph(html, body_style)
-        return Paragraph(text, body_style)
+        return Paragraph(_p(text), body_style)
 
     # ── Parse & render ────────────────────────────────────────────────────
     tokens = parse_resume(resume_text)
@@ -718,14 +753,14 @@ def generate_pdf(resume_text: str, candidate_name: str = "Resume") -> bytes:
     for tok in tokens:
 
         if tok.kind == 'name':
-            story.append(Paragraph(tok.text.upper(), name_style))
+            story.append(Paragraph(_p(tok.text.upper()), name_style))
 
         elif tok.kind == 'contact':
-            story.append(Paragraph(tok.text, contact_style))
+            story.append(Paragraph(_p(tok.text), contact_style))
 
         elif tok.kind == 'section':
             story.append(Spacer(1, 10))
-            story.append(Paragraph(tok.text.upper(), section_style))
+            story.append(Paragraph(_p(tok.text.upper()), section_style))
             story.append(HRFlowable(
                 width='100%',
                 thickness=1.0,
@@ -742,7 +777,7 @@ def generate_pdf(resume_text: str, candidate_name: str = "Resume") -> bytes:
                     entry_head_l_style, entry_head_r_style,
                 ))
             else:
-                story.append(Paragraph(tok.text, entry_head_l_style))
+                story.append(Paragraph(_p(tok.text), entry_head_l_style))
 
         elif tok.kind == 'entry_sub':
             if tok.extra:
@@ -752,7 +787,7 @@ def generate_pdf(resume_text: str, candidate_name: str = "Resume") -> bytes:
                     space_before=0, space_after=3,
                 ))
             else:
-                story.append(Paragraph(tok.text, entry_sub_l_style))
+                story.append(Paragraph(_p(tok.text), entry_sub_l_style))
 
         elif tok.kind == 'bullet':
             story.append(_bullet_para(tok.text))
@@ -761,8 +796,10 @@ def generate_pdf(resume_text: str, candidate_name: str = "Resume") -> bytes:
             story.append(_skill_para(tok.text))
 
         elif tok.kind == 'body':
-            story.append(Paragraph(tok.text, body_style))
+            story.append(Paragraph(_p(tok.text), body_style))
 
+    if not story:
+        story.append(Spacer(1, 1))
     doc.build(story)
     buf.seek(0)
     return buf.read()

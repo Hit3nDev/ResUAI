@@ -1,459 +1,333 @@
 "use client";
-import { useState } from "react";
-import Navbar from "@/components/Navbar";
-import { createResume, downloadResume, saveResumeToAccount } from "@/lib/api";
-import { Plus, Trash2, FileDown, ChevronDown, ChevronUp, CheckCircle, BookmarkPlus } from "lucide-react";
-import DownloadGate from "@/components/DownloadGate";
-import { useAuth } from "@/lib/AuthContext";
-import Link from "next/link";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { ArrowLeft, ArrowRight, Bookmark, Plus, Trash2 } from "lucide-react";
 import toast from "react-hot-toast";
+import AppShell from "@/components/AppShell";
+import DownloadGate from "@/components/DownloadGate";
+import { ResumeSheet, ResumeText } from "@/components/ResumeSheet";
+import { CanvasBar, Check, Field, Segmented, Select, Spinner, Stepper, TextArea, ViewSwitch, Working } from "@/components/ui";
+import { createResume, CreateResult, downloadResume, saveResumeToAccount } from "@/lib/api";
+import { draftBlocks } from "@/lib/draft";
+import { useAuth } from "@/lib/AuthContext";
 
-const levels = ["Fresher / Entry Level", "1–3 Years", "3–7 Years", "7+ Years / Senior"];
-const tones  = ["Professional", "Conversational", "Confident & Bold", "Friendly"];
+const LEVELS = ["Fresher / Entry Level", "1–3 Years", "3–7 Years", "7+ Years / Senior"];
+const TONES  = ["Professional", "Conversational", "Confident & Bold", "Friendly"];
 
-interface Exp  { company: string; title: string; duration: string; location: string; bullets: string }
-interface Edu  { degree: string; school: string; year: string; gpa: string }
+const STEPS = [
+  { short: "Basics",     title: "Basics",         help: "How employers reach you." },
+  { short: "Role",       title: "Target role",    help: "What you’re aiming for. The AI tunes the wording to it." },
+  { short: "Experience", title: "Experience",     help: "Rough notes are fine. Add numbers wherever you have them." },
+  { short: "Education",  title: "Education",      help: "Degrees, schools, grades." },
+  { short: "Skills",     title: "Skills",         help: "Comma-separated lists." },
+  { short: "Extras",     title: "Everything else", help: "Certifications, projects, languages, awards. One per line." },
+  { short: "Letter",     title: "Cover letter",   help: "Optional. Written from the resume once it’s generated." },
+];
 
-function Section({ title, open, toggle, children }: any) {
-  return (
-    // FIX 5: increased marginBottom from 12 → 16, better vertical rhythm
-    <div className="card-static" style={{ marginBottom: 16, borderRadius: 14 }}>
-      <button
-        onClick={toggle}
-        style={{
-          width: "100%", padding: "18px 22px",
-          display: "flex", alignItems: "center", justifyContent: "space-between",
-          background: "none", border: "none", cursor: "pointer", color: "#E8EEF8",
-          // Subtle hover bg
-          transition: "background 0.15s ease",
-          borderRadius: open ? "14px 14px 0 0" : 14,
-        }}
-        onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,255,255,0.02)"; }}
-        onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = "none"; }}
-      >
-        <span style={{ fontSize: 14, fontWeight: 700, letterSpacing: "-0.01em", color: "#E8EEF8" }}>{title}</span>
-        {open
-          ? <ChevronUp size={15} color="#00C896" style={{ transition: "transform 0.2s" }} />
-          : <ChevronDown size={15} color="#7A8BA8" style={{ transition: "transform 0.2s" }} />
-        }
-      </button>
-      {open && (
-        <div style={{
-          // FIX 5: proper internal padding — 8px top gap, 24px sides/bottom
-          padding: "8px 22px 26px",
-          borderTop: "1px solid #162034",
-        }}>
-          {children}
-        </div>
-      )}
-    </div>
-  );
+interface Exp { company: string; title: string; duration: string; location: string; bullets: string }
+interface Edu { degree: string; school: string; year: string; gpa: string }
+interface Form {
+  name: string; email: string; phone: string; loc: string; linkedin: string; site: string;
+  role: string; level: string; summary: string;
+  exps: Exp[]; edus: Edu[];
+  tech: string; soft: string;
+  certs: string; projects: string; langs: string; awards: string;
+  genCL: boolean; company: string; tone: string; jd: string;
 }
 
-function FieldGroup({ children, cols = 3 }: { children: React.ReactNode; cols?: number }) {
-  // FIX 5: gap from 12 → 16, marginBottom on group
-  return (
-    <div style={{
-      display: "grid",
-      gridTemplateColumns: `repeat(${cols}, 1fr)`,
-      gap: 16,
-      marginBottom: 16,
-    }}>
-      {children}
-    </div>
-  );
-}
+const blankExp = (): Exp => ({ company: "", title: "", duration: "", location: "", bullets: "" });
+const blankEdu = (): Edu => ({ degree: "", school: "", year: "", gpa: "" });
+const blank: Form = {
+  name: "", email: "", phone: "", loc: "", linkedin: "", site: "",
+  role: "", level: LEVELS[0], summary: "",
+  exps: [blankExp()], edus: [blankEdu()],
+  tech: "", soft: "", certs: "", projects: "", langs: "", awards: "",
+  genCL: false, company: "", tone: TONES[0], jd: "",
+};
 
-function Field({ label, value, onChange, placeholder, type = "text" }: any) {
-  return (
-    // FIX 5: label marginBottom 8px, wrapper marginBottom 0 (FieldGroup handles spacing)
-    <div style={{ display: "flex", flexDirection: "column" }}>
-      <label className="field-label" style={{ marginBottom: 8, fontSize: 11 }}>{label}</label>
-      {type === "textarea"
-        ? (
-          <textarea
-            className="field"
-            rows={3}
-            value={value}
-            onChange={e => onChange(e.target.value)}
-            placeholder={placeholder}
-            style={{ resize: "vertical", lineHeight: 1.6 }}
-          />
-        ) : (
-          <input
-            className="field"
-            type={type}
-            value={value}
-            onChange={e => onChange(e.target.value)}
-            placeholder={placeholder}
-          />
-        )
-      }
-    </div>
-  );
-}
+const DRAFT_KEY = "resuai:builder:draft";
+const RESULT_KEY = "resuai:builder:result";
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+const lines = (s: string) => s.split("\n").map(x => x.trim()).filter(Boolean);
+const csv   = (s: string) => s.split(",").map(x => x.trim()).filter(Boolean);
 
 export default function BuilderPage() {
-  // Personal
-  const [name, setName]     = useState("");
-  const [email, setEmail]   = useState("");
-  const [phone, setPhone]   = useState("");
-  const [loc, setLoc]       = useState("");
-  const [linkedin, setLi]   = useState("");
-  const [site, setSite]     = useState("");
-
-  // Role
-  const [role, setRole]     = useState("");
-  const [level, setLevel]   = useState(levels[0]);
-  const [summary, setSummary] = useState("");
-
-  // Experience
-  const [exps, setExps] = useState<Exp[]>([{ company: "", title: "", duration: "", location: "", bullets: "" }]);
-
-  // Education
-  const [edus, setEdus] = useState<Edu[]>([{ degree: "", school: "", year: "", gpa: "" }]);
-
-  // Skills
-  const [techSkills, setTech] = useState("");
-  const [softSkills, setSoft] = useState("");
-
-  // Extra
-  const [certs, setCerts]   = useState("");
-  const [projects, setProj] = useState("");
-  const [langs, setLangs]   = useState("");
-  const [awards, setAwards] = useState("");
-
-  // Cover letter
-  const [genCL, setGenCL]     = useState(false);
-  const [company, setCompany] = useState("");
-  const [tone, setTone]       = useState(tones[0]);
-  const [jd, setJd]           = useState("");
-
-  // UI
-  const [open, setOpen]     = useState<Record<string, boolean>>({ personal: true, role: true, exp: true, edu: false, skills: false, extra: false, cl: false });
-  const [loading, setLoading] = useState(false);
-  const [result, setResult]   = useState<{ resume_text: string; cover_letter?: string; attempt_id: number; word_count: number } | null>(null);
-  const [saved,   setSaved]   = useState(false);
   const { user } = useAuth();
+  const [f, setF] = useState<Form>(blank);
+  const [hydrated, setHydrated] = useState(false);
+  const [step, setStep] = useState(0);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<CreateResult | null>(null);
+  const [view, setView] = useState<"draft" | "ai" | "letter">("draft");
+  const [mview, setMview] = useState<"edit" | "preview">("edit");
+  const [saved, setSaved] = useState(false);
+  const [confirmReset, setConfirmReset] = useState(false);
 
-  const toggle = (k: string) => setOpen(p => ({ ...p, [k]: !p[k] }));
+  const set = useCallback(<K extends keyof Form>(k: K, v: Form[K]) => setF(p => ({ ...p, [k]: v })), []);
 
-  const addExp = () => setExps(p => [...p, { company: "", title: "", duration: "", location: "", bullets: "" }]);
-  const remExp = (i: number) => setExps(p => p.filter((_, j) => j !== i));
-  const setExp = (i: number, key: keyof Exp, v: string) => setExps(p => p.map((e, j) => j === i ? { ...e, [key]: v } : e));
-
-  const addEdu = () => setEdus(p => [...p, { degree: "", school: "", year: "", gpa: "" }]);
-  const remEdu = (i: number) => setEdus(p => p.filter((_, j) => j !== i));
-  const setEdu = (i: number, key: keyof Edu, v: string) => setEdus(p => p.map((e, j) => j === i ? { ...e, [key]: v } : e));
-
-  async function generate() {
-    if (!name.trim() || !role.trim()) { toast.error("Name and Target Role are required"); return; }
-    setLoading(true);
-    const toastId = toast.loading("Generating your resume...");
+  // Restore draft + last result (survives the sign-in detour and accidental reloads)
+  useEffect(() => {
     try {
-      const data = {
-        personal: { name, email, phone, location: loc, linkedin, website: site },
-        target_role: role, experience_level: level, summary_hint: summary,
-        experiences: exps.filter(e => e.company && e.title).map(e => ({
-          company: e.company, title: e.title, duration: e.duration, location: e.location,
-          bullets: e.bullets.split("\n").filter(Boolean),
-        })),
-        education: edus.filter(e => e.degree && e.school).map(e => ({
-          degree: e.degree, school: e.school, year: e.year, gpa: e.gpa,
-        })),
-        skills: {
-          technical: techSkills.split(",").map(s => s.trim()).filter(Boolean),
-          soft: softSkills.split(",").map(s => s.trim()).filter(Boolean),
-        },
-        certifications: certs.split("\n").filter(Boolean),
-        projects: projects.split("\n").filter(Boolean),
-        languages: langs.split("\n").filter(Boolean),
-        achievements: awards.split("\n").filter(Boolean),
-        generate_cover_letter: genCL,
-        company_name: company, cover_tone: tone, job_description: jd,
-      };
-      const res = await createResume(data);
-      setResult(res);
-      toast.success(`Resume created — ${res.word_count} words`, { id: toastId });
-    } catch (e: any) {
-      toast.error(e.message || "Generation failed", { id: toastId });
-    } finally {
-      setLoading(false);
-    }
+      const d = localStorage.getItem(DRAFT_KEY);
+      if (d) setF({ ...blank, ...JSON.parse(d) });
+      const r = sessionStorage.getItem(RESULT_KEY);
+      if (r) { setResult(JSON.parse(r)); setView("ai"); }
+    } catch {}
+    setHydrated(true);
+  }, []);
+  useEffect(() => {
+    if (!hydrated) return;
+    const t = setTimeout(() => { try { localStorage.setItem(DRAFT_KEY, JSON.stringify(f)); } catch {} }, 400);
+    return () => clearTimeout(t);
+  }, [f, hydrated]);
+
+  const setExp = (i: number, k: keyof Exp, v: string) => set("exps", f.exps.map((e, j) => (j === i ? { ...e, [k]: v } : e)));
+  const setEdu = (i: number, k: keyof Edu, v: string) => set("edus", f.edus.map((e, j) => (j === i ? { ...e, [k]: v } : e)));
+
+  const done = [
+    !!(f.name.trim() && f.email.trim()),
+    !!f.role.trim(),
+    f.exps.some(e => e.company && e.title),
+    f.edus.some(e => e.degree && e.school),
+    !!(f.tech.trim() || f.soft.trim()),
+    !!(f.certs.trim() || f.projects.trim() || f.langs.trim() || f.awards.trim()),
+    f.genCL,
+  ];
+  const stepOf = (k: string) => (k === "name" || k === "email" ? 0 : k === "role" ? 1 : k.startsWith("exp") ? 2 : 3);
+  const errSteps = STEPS.map((_, i) => Object.keys(errors).some(k => stepOf(k) === i));
+
+  function validate() {
+    const e: Record<string, string> = {};
+    if (!f.name.trim())  e.name  = "Your name is required.";
+    if (!f.email.trim()) e.email = "An email address is required.";
+    else if (!EMAIL_RE.test(f.email.trim())) e.email = "That doesn’t look like an email address.";
+    if (!f.role.trim())  e.role  = "Tell us the role you’re aiming for.";
+    f.exps.forEach((x, i) => { if ((x.company || x.title) && !(x.company && x.title)) e[`exp${i}`] = "Add both a company and a job title, or clear this position."; });
+    f.edus.forEach((x, i) => { if ((x.degree || x.school) && !(x.degree && x.school)) e[`edu${i}`] = "Add both a degree and an institution, or clear this entry."; });
+    setErrors(e);
+    return e;
   }
 
+  async function generate() {
+    const e = validate();
+    const keys = Object.keys(e);
+    if (keys.length) {
+      toast.error(e[keys[0]]);
+      setStep(Math.min(...keys.map(stepOf)));
+      setMview("edit");
+      return;
+    }
+    setLoading(true); setSaved(false);
+    const tid = toast.loading("Writing your resume…");
+    try {
+      const res = await createResume({
+        personal: { name: f.name.trim(), email: f.email.trim(), phone: f.phone, location: f.loc, linkedin: f.linkedin, website: f.site },
+        target_role: f.role.trim(), experience_level: f.level, summary_hint: f.summary,
+        experiences: f.exps.filter(x => x.company || x.title).map(x => ({ ...x, bullets: lines(x.bullets) })),
+        education:   f.edus.filter(x => x.degree || x.school),
+        skills: { technical: csv(f.tech), soft: csv(f.soft) },
+        certifications: lines(f.certs), projects: lines(f.projects), languages: lines(f.langs), achievements: lines(f.awards),
+        generate_cover_letter: f.genCL, company_name: f.company, cover_tone: f.tone, job_description: f.jd,
+      });
+      setResult(res); setView("ai"); setMview("preview");
+      try { sessionStorage.setItem(RESULT_KEY, JSON.stringify(res)); } catch {}
+      toast.success(`Done. ${res.word_count} words.`, { id: tid });
+      if (f.genCL && !res.cover_letter) toast.error("The resume is ready, but the cover letter wasn’t written.", { duration: 6000 });
+    } catch (err: any) {
+      toast.error(err.message || "Generation failed", { id: tid });
+    } finally { setLoading(false); }
+  }
+
+  async function saveToAccount() {
+    if (!result) return;
+    try {
+      await saveResumeToAccount(result.attempt_id, `${f.name || "My"} — ${f.role || "Resume"}`, result.resume_text);
+      setSaved(true); toast.success("Saved to your library.");
+    } catch (e: any) { toast.error(e.message || "Couldn’t save"); }
+  }
+
+  function reset() {
+    setF(blank); setResult(null); setErrors({}); setSaved(false); setStep(0); setView("draft"); setConfirmReset(false);
+    try { localStorage.removeItem(DRAFT_KEY); sessionStorage.removeItem(RESULT_KEY); } catch {}
+  }
+
+  const blocks = useMemo(() => draftBlocks(f), [f]);
+  const S = STEPS[step];
+
   return (
-    <div style={{ minHeight: "100vh" }}>
-      <Navbar />
-      <div className="max-w-[1320px] mx-auto px-6 py-10">
-        {/* Header */}
-        <div style={{ marginBottom: 32 }}>
-          <div className="sec-label">Resume Builder</div>
-          <h1 style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.025em", color: "#E8EEF8", marginBottom: 8 }}>
-            Create Resume from Scratch
-          </h1>
-          <p style={{ fontSize: 14, color: "#7A8BA8" }}>Fill in your details. AI generates a polished, ATS-optimized resume in seconds.</p>
-        </div>
+    <AppShell title="Build" sub={f.name.trim() ? `${f.name.trim()}${f.role.trim() ? " · " + f.role.trim() : ""}` : "New resume"}
+      actions={
+        <button className="btn btn-blue" onClick={generate} disabled={loading}>
+          {loading ? <><Spinner /> Writing…</> : result ? "Regenerate" : "Generate resume"}
+        </button>
+      }>
+      <ViewSwitch value={mview} onChange={setMview} a="Edit" b="Preview" />
 
-        <div className="grid grid-cols-1 xl:grid-cols-[1fr_460px] gap-8">
-          {/* Left — form */}
-          <div>
-            {/* Status banner */}
-            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "11px 16px", background: "rgba(0,200,150,0.08)", border: "1px solid rgba(0,200,150,0.2)", borderRadius: 10, marginBottom: 20 }}>
-              <div style={{ width: 7, height: 7, borderRadius: "50%", background: "#00C896", boxShadow: "0 0 6px #00C896" }} />
-              <span style={{ fontSize: 13, color: "#00C896", fontWeight: 500 }}>AI Ready — Groq Llama 3.3 70B connected</span>
-            </div>
-
-            {/* Personal Info */}
-            <Section title="Personal Information" open={open.personal} toggle={() => toggle("personal")}>
-              <FieldGroup>
-                <Field label="Full Name *"    value={name}  onChange={setName}  placeholder="Alex Johnson" />
-                <Field label="Email *"        value={email} onChange={setEmail} placeholder="alex@email.com" type="email" />
-                <Field label="Phone"          value={phone} onChange={setPhone} placeholder="+91 98765 43210" />
-              </FieldGroup>
-              <FieldGroup cols={3} >
-                <Field label="Location"     value={loc}     onChange={setLoc}  placeholder="New Delhi, India" />
-                <Field label="LinkedIn URL" value={linkedin} onChange={setLi}  placeholder="linkedin.com/in/alex" />
-                <Field label="Portfolio / GitHub" value={site} onChange={setSite} placeholder="github.com/alex" />
-              </FieldGroup>
-            </Section>
-
-            {/* Target Role */}
-            <Section title="Target Role" open={open.role} toggle={() => toggle("role")}>
-              <FieldGroup cols={2}>
-                <Field label="Target Job Title *" value={role} onChange={setRole} placeholder="Software Engineer" />
-                <div>
-                  <label className="field-label">Experience Level</label>
-                  <select className="field" value={level} onChange={e => setLevel(e.target.value)}>
-                    {levels.map(l => <option key={l} value={l}>{l}</option>)}
-                  </select>
-                </div>
-              </FieldGroup>
-              <Field label="Professional Summary Hint (optional — AI writes one if blank)" value={summary} onChange={setSummary} placeholder="Brief background overview..." type="textarea" />
-            </Section>
-
-            {/* Work Experience */}
-            <Section title={`Work Experience (${exps.filter(e => e.company).length} added)`} open={open.exp} toggle={() => toggle("exp")}>
-              {exps.map((exp, i) => (
-                <div key={i} style={{
-                  background: "rgba(255,255,255,0.02)",
-                  border: "1px solid #162034",
-                  borderRadius: 12,
-                  padding: "18px",
-                  marginBottom: 12,
-                }}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
-                    <span style={{ fontSize: 11, fontWeight: 700, color: "#3D5270", textTransform: "uppercase", letterSpacing: "0.08em" }}>
-                      Position {i + 1}{i === 0 ? " — Most Recent" : ""}
-                    </span>
-                    {exps.length > 1 && (
-                      <button onClick={() => remExp(i)} style={{ background: "none", border: "none", cursor: "pointer", color: "#3D5270", padding: 4, transition: "color 0.15s" }}
-                        onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = "#F87171"; }}
-                        onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = "#3D5270"; }}
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    )}
-                  </div>
-                  <FieldGroup cols={2}>
-                    <Field label="Company"   value={exp.company}  onChange={(v: string) => setExp(i, "company", v)}  placeholder="Google" />
-                    <Field label="Job Title" value={exp.title}    onChange={(v: string) => setExp(i, "title", v)}    placeholder="Software Engineer" />
-                    <Field label="Duration"  value={exp.duration} onChange={(v: string) => setExp(i, "duration", v)} placeholder="Jan 2022 – Present" />
-                    <Field label="Location"  value={exp.location} onChange={(v: string) => setExp(i, "location", v)} placeholder="Bangalore" />
-                  </FieldGroup>
-                  {/* FIX 5: Explicit label margin for long-label fields */}
-                  <div>
-                    <label className="field-label" style={{ marginBottom: 8, fontSize: 11 }}>Responsibilities &amp; Achievements (one per line)</label>
-                    <textarea className="field" rows={3} value={exp.bullets} onChange={e => setExp(i, "bullets", e.target.value)}
-                      placeholder={"Built REST APIs serving 10,000+ daily users\nReduced query time 40% via indexing"} style={{ resize: "vertical", lineHeight: 1.6 }} />
-                  </div>
-                </div>
-              ))}
-              {exps.length < 5 && (
-                <button onClick={addExp} className="btn-ghost" style={{ padding: "9px 16px", fontSize: 13, display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
-                  <Plus size={14} /> Add Position
-                </button>
-              )}
-            </Section>
-
-            {/* Education */}
-            <Section title={`Education (${edus.filter(e => e.degree).length} added)`} open={open.edu} toggle={() => toggle("edu")}>
-              {edus.map((edu, i) => (
-                <div key={i} className="card-static" style={{ padding: "16px", marginBottom: 10 }}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: "#7A8BA8", textTransform: "uppercase", letterSpacing: "0.08em" }}>
-                      Education {i + 1}
-                    </span>
-                    {edus.length > 1 && (
-                      <button onClick={() => remEdu(i)} style={{ background: "none", border: "none", cursor: "pointer", color: "#7A8BA8" }}>
-                        <Trash2 size={14} />
-                      </button>
-                    )}
-                  </div>
-                  <FieldGroup cols={2}>
-                    <Field label="Degree"       value={edu.degree} onChange={(v: string) => setEdu(i, "degree", v)} placeholder="B.Tech Computer Science" />
-                    <Field label="Institution"  value={edu.school} onChange={(v: string) => setEdu(i, "school", v)} placeholder="IIT Delhi" />
-                    <Field label="Year"         value={edu.year}   onChange={(v: string) => setEdu(i, "year", v)}   placeholder="2023" />
-                    <Field label="GPA / Grade"  value={edu.gpa}    onChange={(v: string) => setEdu(i, "gpa", v)}    placeholder="8.7 / 10" />
-                  </FieldGroup>
-                </div>
-              ))}
-              {edus.length < 4 && (
-                <button onClick={addEdu} className="btn-ghost" style={{ padding: "9px 16px", fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
-                  <Plus size={14} /> Add Education
-                </button>
-              )}
-            </Section>
-
-            {/* Skills */}
-            <Section title="Skills" open={open.skills} toggle={() => toggle("skills")}>
-              <FieldGroup cols={2}>
-                <Field label="Technical Skills (comma-separated)" value={techSkills} onChange={setTech} placeholder="Python, React, AWS, SQL" type="textarea" />
-                <Field label="Soft Skills (comma-separated)"      value={softSkills} onChange={setSoft} placeholder="Leadership, Communication" type="textarea" />
-              </FieldGroup>
-            </Section>
-
-            {/* Additional */}
-            <Section title="Additional Sections" open={open.extra} toggle={() => toggle("extra")}>
-              <FieldGroup cols={2}>
-                <Field label="Certifications (one per line)"   value={certs}    onChange={setCerts}   placeholder={"AWS Solutions Architect\nGoogle Analytics"} type="textarea" />
-                <Field label="Languages (one per line)"        value={langs}    onChange={setLangs}   placeholder={"English (Fluent)\nHindi (Native)"}          type="textarea" />
-                <Field label="Projects (one per line)"         value={projects} onChange={setProj}    placeholder={"ResUAI – Python/Next.js\nDashboard – BI"} type="textarea" />
-                <Field label="Awards / Achievements"           value={awards}   onChange={setAwards}  placeholder={"Hackathon Winner 2024\nDean's List 2023"}   type="textarea" />
-              </FieldGroup>
-            </Section>
-
-            {/* Cover Letter */}
-            <Section title="Cover Letter (Optional)" open={open.cl} toggle={() => toggle("cl")}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
-                <input type="checkbox" id="genCL" checked={genCL} onChange={e => setGenCL(e.target.checked)} style={{ accentColor: "#00C896", width: 16, height: 16 }} />
-                <label htmlFor="genCL" style={{ fontSize: 14, color: "#7A8BA8", cursor: "pointer" }}>Also generate a Cover Letter</label>
-              </div>
-              {genCL && (
-                <FieldGroup cols={2}>
-                  <Field label="Company Name" value={company} onChange={setCompany} placeholder="Amazon" />
-                  <div>
-                    <label className="field-label">Tone</label>
-                    <select className="field" value={tone} onChange={e => setTone(e.target.value)}>
-                      {tones.map(t => <option key={t} value={t}>{t}</option>)}
-                    </select>
-                  </div>
-                  <div style={{ gridColumn: "span 2" }}>
-                    <Field label="Job Description (optional)" value={jd} onChange={setJd} placeholder="Paste full job posting here..." type="textarea" />
-                  </div>
-                </FieldGroup>
-              )}
-            </Section>
-
-            {/* Generate button */}
-            <button className="btn-primary" onClick={generate} disabled={loading} style={{ width: "100%", padding: "14px", fontSize: 15, marginTop: 8, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-              {loading ? <><div className="spinner" />  Generating...</> : "Generate Resume"}
-            </button>
-          </div>
-
-          {/* Right — output panel */}
-          <div>
-            <div style={{ position: "sticky", top: 80 }}>
-              {result ? (
-                <div className="animate-fade-up">
-                  {/* Success header */}
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 16px", background: "rgba(0,200,150,0.08)", border: "1px solid rgba(0,200,150,0.2)", borderRadius: 10, marginBottom: 16 }}>
-                    <CheckCircle size={15} color="#00C896" />
-                    <span style={{ fontSize: 13, color: "#00C896", fontWeight: 600 }}>Resume generated — {result.word_count} words</span>
-                  </div>
-
-                  {/* Save to account CTA — shown to logged-in users */}
-                  {user && !saved && (
-                    <button
-                      onClick={async () => {
-                        try {
-                          await saveResumeToAccount(result.attempt_id, `${name || "My"} Resume`, result.resume_text);
-                          setSaved(true);
-                          toast.success("Resume saved to your account!");
-                        } catch (e: any) {
-                          toast.error(e.message || "Save failed");
-                        }
-                      }}
-                      style={{
-                        width: "100%", marginBottom: 12,
-                        display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-                        padding: "10px", fontSize: 13, fontWeight: 600,
-                        background: "rgba(0,200,150,0.08)", border: "1px solid rgba(0,200,150,0.2)",
-                        borderRadius: 10, cursor: "pointer", color: "#00C896",
-                        fontFamily: "inherit", transition: "all 0.2s",
-                      }}
-                      onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(0,200,150,0.14)"; }}
-                      onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(0,200,150,0.08)"; }}
-                    >
-                      <BookmarkPlus size={14} /> Save to My Account
-                    </button>
-                  )}
-                  {user && saved && (
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "10px", marginBottom: 12, background: "rgba(0,200,150,0.05)", border: "1px solid rgba(0,200,150,0.15)", borderRadius: 10, fontSize: 13, color: "#00C896" }}>
-                      <CheckCircle size={14} /> Saved to your account
-                    </div>
-                  )}
-                  {/* Upsell for logged-out users */}
-                  {!user && (
-                    <div style={{ marginBottom: 12, padding: "12px 14px", background: "rgba(14,165,233,0.06)", border: "1px solid rgba(14,165,233,0.15)", borderRadius: 10, fontSize: 13 }}>
-                      <div style={{ color: "#7A8BA8", marginBottom: 6 }}>
-                        <span style={{ color: "#38BDF8", fontWeight: 600 }}>Pro tip:</span> Create a free account to save, re-download, and edit your resumes anytime.
-                      </div>
-                      <Link href="/signup">
-                        <button style={{ fontSize: 12, padding: "6px 14px", background: "rgba(14,165,233,0.12)", border: "1px solid rgba(14,165,233,0.25)", borderRadius: 8, cursor: "pointer", color: "#38BDF8", fontWeight: 600, fontFamily: "inherit" }}>
-                          Sign up free →
-                        </button>
-                      </Link>
-                    </div>
-                  )}
-
-                  {/* Download buttons → auth-gated */}
-                  <div className="card-static" style={{ padding: "18px", marginBottom: 12 }}>
-                    <div className="sec-label" style={{ marginBottom: 12 }}>Download Resume</div>
-                    <DownloadGate
-                      attemptId={result.attempt_id}
-                      onDownload={(fmt) => downloadResume(result.attempt_id, fmt)}
-                    />
-                  </div>
-
-                  {/* Preview */}
-                  <div className="card-static">
-                    <div style={{ padding: "14px 16px", borderBottom: "1px solid #162034", display: "flex", gap: 6 }}>
-                      <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#EF4444", marginTop: 2 }} />
-                      <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#F59E0B", marginTop: 2 }} />
-                      <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#10B981", marginTop: 2 }} />
-                      <span style={{ fontSize: 11, color: "#3D5270", marginLeft: 8 }}>Resume Preview</span>
-                    </div>
-                    <div className="resume-view" style={{ borderRadius: "0 0 14px 14px", border: "none", margin: 0 }}>
-                      {result.resume_text}
-                    </div>
-                  </div>
-
-                  {/* Cover letter */}
-                  {result.cover_letter && (
-                    <div className="card-static" style={{ marginTop: 12 }}>
-                      <div style={{ padding: "14px 16px", borderBottom: "1px solid #162034" }}>
-                        <span style={{ fontSize: 12, fontWeight: 700, color: "#7A8BA8", textTransform: "uppercase", letterSpacing: "0.07em" }}>Cover Letter</span>
-                      </div>
-                      <div className="resume-view" style={{ borderRadius: "0 0 14px 14px", border: "none", maxHeight: 300 }}>
-                        {result.cover_letter}
-                      </div>
-                    </div>
-                  )}
-                </div>
+      <div className="ws" data-view={mview}>
+        {/* ── Form ─────────────────────────────────────────────────────── */}
+        <section className="ws-form" aria-label="Resume details">
+          <div className="ws-scroll">
+            <Stepper labels={STEPS.map(s => s.short)} current={step} done={done} err={errSteps} onGo={setStep} />
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+              <h2 className="h-step">{S.title}</h2>
+              {confirmReset ? (
+                <span style={{ display: "inline-flex", gap: 4, flexShrink: 0 }}>
+                  <button className="btn btn-danger btn-sm" onClick={reset}>Clear all</button>
+                  <button className="btn btn-quiet btn-sm" onClick={() => setConfirmReset(false)}>Keep</button>
+                </span>
               ) : (
-                <div className="card" style={{ padding: "40px 24px", textAlign: "center" }}>
-                  <div style={{ width: 52, height: 52, borderRadius: 14, background: "rgba(0,200,150,0.08)", border: "1px solid rgba(0,200,150,0.15)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px" }}>
-                    <FileDown size={22} color="#00C896" />
+                <button className="btn btn-quiet btn-sm" onClick={() => setConfirmReset(true)} style={{ flexShrink: 0 }}>Reset</button>
+              )}
+            </div>
+            <p className="small" style={{ margin: "0 0 22px" }}>{S.help}</p>
+
+            <div key={step} className="step-body">
+              {step === 0 && (
+                <div className="grid2">
+                  <Field label="Full name" required value={f.name} onChange={v => set("name", v)} placeholder="Alex Johnson" error={errors.name} autoComplete="name" />
+                  <Field label="Email" required type="email" value={f.email} onChange={v => set("email", v)} placeholder="alex@email.com" error={errors.email} autoComplete="email" />
+                  <Field label="Phone" value={f.phone} onChange={v => set("phone", v)} placeholder="+91 98765 43210" autoComplete="tel" />
+                  <Field label="Location" value={f.loc} onChange={v => set("loc", v)} placeholder="New Delhi, India" />
+                  <Field label="LinkedIn" value={f.linkedin} onChange={v => set("linkedin", v)} placeholder="linkedin.com/in/alex" />
+                  <Field label="Portfolio / GitHub" value={f.site} onChange={v => set("site", v)} placeholder="github.com/alex" />
+                </div>
+              )}
+
+              {step === 1 && (
+                <div className="col">
+                  <Field label="Job title you’re aiming for" required value={f.role} onChange={v => set("role", v)} placeholder="Software Engineer" error={errors.role} />
+                  <Select label="Experience level" value={f.level} onChange={v => set("level", v)} options={LEVELS} />
+                  <TextArea label="Summary hint" optional rows={3} value={f.summary} onChange={v => set("summary", v)}
+                    placeholder="A line or two about your background."
+                    hint="Leave it blank and the AI writes the summary." />
+                </div>
+              )}
+
+              {step === 2 && (
+                <div>
+                  {f.exps.map((x, i) => (
+                    <div key={i} className="subpanel">
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                        <b style={{ fontSize: 13 }}>Position {i + 1}{i === 0 ? " · most recent" : ""}</b>
+                        {f.exps.length > 1 && (
+                          <button className="btn btn-quiet btn-sm" onClick={() => set("exps", f.exps.filter((_, j) => j !== i))} aria-label={`Remove position ${i + 1}`}>
+                            <Trash2 size={14} /> Remove
+                          </button>
+                        )}
+                      </div>
+                      <div className="grid2">
+                        <Field label="Company"   value={x.company}  onChange={v => setExp(i, "company", v)}  placeholder="Google" />
+                        <Field label="Job title" value={x.title}    onChange={v => setExp(i, "title", v)}    placeholder="Software Engineer" />
+                        <Field label="Dates"     value={x.duration} onChange={v => setExp(i, "duration", v)} placeholder="Jan 2022 – Present" />
+                        <Field label="Location"  value={x.location} onChange={v => setExp(i, "location", v)} placeholder="Bangalore" />
+                        <TextArea className="span2" label="What you did" hint="One per line." rows={4} value={x.bullets} onChange={v => setExp(i, "bullets", v)}
+                          placeholder={"Built REST APIs serving 10,000+ daily users\nCut query time 40% by adding indexes"} />
+                      </div>
+                      {errors[`exp${i}`] && <div className="err" role="alert">{errors[`exp${i}`]}</div>}
+                    </div>
+                  ))}
+                  {f.exps.length < 5 && <button className="btn btn-line btn-sm" onClick={() => set("exps", [...f.exps, blankExp()])}><Plus size={14} /> Add position</button>}
+                </div>
+              )}
+
+              {step === 3 && (
+                <div>
+                  {f.edus.map((x, i) => (
+                    <div key={i} className="subpanel">
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                        <b style={{ fontSize: 13 }}>Education {i + 1}</b>
+                        {f.edus.length > 1 && (
+                          <button className="btn btn-quiet btn-sm" onClick={() => set("edus", f.edus.filter((_, j) => j !== i))} aria-label={`Remove education ${i + 1}`}>
+                            <Trash2 size={14} /> Remove
+                          </button>
+                        )}
+                      </div>
+                      <div className="grid2">
+                        <Field label="Degree"      value={x.degree} onChange={v => setEdu(i, "degree", v)} placeholder="B.Tech, Computer Science" />
+                        <Field label="Institution" value={x.school} onChange={v => setEdu(i, "school", v)} placeholder="IIT Delhi" />
+                        <Field label="Year"        value={x.year}   onChange={v => setEdu(i, "year", v)}   placeholder="2023" />
+                        <Field label="GPA / grade" value={x.gpa}    onChange={v => setEdu(i, "gpa", v)}    placeholder="8.7 / 10" />
+                      </div>
+                      {errors[`edu${i}`] && <div className="err" role="alert">{errors[`edu${i}`]}</div>}
+                    </div>
+                  ))}
+                  {f.edus.length < 4 && <button className="btn btn-line btn-sm" onClick={() => set("edus", [...f.edus, blankEdu()])}><Plus size={14} /> Add education</button>}
+                </div>
+              )}
+
+              {step === 4 && (
+                <div className="col">
+                  <TextArea label="Technical" rows={3} value={f.tech} onChange={v => set("tech", v)} placeholder="Python, React, AWS, SQL" />
+                  <TextArea label="Soft skills" rows={3} value={f.soft} onChange={v => set("soft", v)} placeholder="Leadership, Communication" />
+                </div>
+              )}
+
+              {step === 5 && (
+                <div className="col">
+                  <TextArea label="Certifications" value={f.certs} onChange={v => set("certs", v)} placeholder={"AWS Solutions Architect\nGoogle Analytics"} />
+                  <TextArea label="Projects" value={f.projects} onChange={v => set("projects", v)} placeholder={"ResUAI – Python / Next.js\nSales dashboard – Power BI"} />
+                  <div className="grid2">
+                    <TextArea label="Languages" value={f.langs} onChange={v => set("langs", v)} placeholder={"English (fluent)\nHindi (native)"} />
+                    <TextArea label="Awards" value={f.awards} onChange={v => set("awards", v)} placeholder={"Hackathon winner 2024\nDean’s list 2023"} />
                   </div>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: "#E8EEF8", marginBottom: 8 }}>Your resume appears here</div>
-                  <div style={{ fontSize: 13, color: "#3D5270", lineHeight: 1.65 }}>Fill in the form and click Generate Resume. Download as DOCX or PDF instantly.</div>
+                </div>
+              )}
+
+              {step === 6 && (
+                <div className="col">
+                  <Check id="genCL" checked={f.genCL} onChange={v => set("genCL", v)}>Also write a cover letter</Check>
+                  {f.genCL && (
+                    <>
+                      <div className="grid2">
+                        <Field label="Company" value={f.company} onChange={v => set("company", v)} placeholder="Amazon" />
+                        <Select label="Tone" value={f.tone} onChange={v => set("tone", v)} options={TONES} />
+                      </div>
+                      <TextArea label="Job description" optional rows={6} value={f.jd} onChange={v => set("jd", v)}
+                        placeholder="Paste the job posting here." hint="Without one, the letter will be more generic." />
+                    </>
+                  )}
                 </div>
               )}
             </div>
           </div>
-        </div>
+
+          <div className="ws-foot">
+            <button className="btn btn-line" disabled={step === 0} onClick={() => setStep(s => s - 1)}><ArrowLeft size={16} /> Back</button>
+            {step < STEPS.length - 1
+              ? <button className="btn btn-ink" onClick={() => setStep(s => s + 1)}>Next: {STEPS[step + 1].short} <ArrowRight size={16} /></button>
+              : <button className="btn btn-blue" onClick={generate} disabled={loading}>{loading ? <><Spinner /> Writing…</> : "Generate resume"}</button>}
+          </div>
+        </section>
+
+        {/* ── Canvas ───────────────────────────────────────────────────── */}
+        <section className="ws-canvas" aria-label="Preview" aria-live="polite">
+          <CanvasBar>
+            <Segmented label="Document" value={view} onChange={setView}
+              options={[
+                { value: "draft" as const, label: "Live draft" },
+                ...(result ? [{ value: "ai" as const, label: "AI version" }] : []),
+                ...(result?.cover_letter ? [{ value: "letter" as const, label: "Cover letter" }] : []),
+              ]} />
+            {result && view !== "draft" && (
+              <span style={{ display: "inline-flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                {user && (saved
+                  ? <span className="small" style={{ fontWeight: 700 }}>Saved to library</span>
+                  : <button className="btn btn-quiet btn-sm" onClick={saveToAccount}><Bookmark size={14} /> Save</button>)}
+                <DownloadGate attemptId={result.attempt_id} onDownload={fmt => downloadResume(result.attempt_id, fmt)} />
+              </span>
+            )}
+          </CanvasBar>
+
+          <div className="artboard">
+            {view === "letter" && result?.cover_letter
+              ? <article className="sheet sheet-letter" aria-label="Cover letter">{result.cover_letter}</article>
+              : view === "ai" && result
+                ? <ResumeText text={result.resume_text} />
+                : <ResumeSheet blocks={blocks} />}
+          </div>
+          {loading && <Working>Writing your resume…</Working>}
+        </section>
       </div>
-    </div>
+    </AppShell>
   );
 }

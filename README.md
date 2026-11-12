@@ -10,7 +10,7 @@
 ### 1. Backend
 
 ```bash
-cd resumeai/backend
+cd backend
 
 # Install dependencies
 pip install -r requirements.txt
@@ -30,7 +30,7 @@ Docs: http://localhost:8000/docs
 ### 2. Frontend
 
 ```bash
-cd resumeai/frontend
+cd frontend
 
 npm install
 
@@ -41,6 +41,16 @@ npm run dev
 ```
 
 App: http://localhost:3000
+
+### Run the backend tests
+
+```bash
+cd backend
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+The suite uses a temporary database/upload folder and mocks all AI calls — it never touches your real data or API key.
 
 ---
 
@@ -55,6 +65,10 @@ App: http://localhost:3000
 | `PORT` | No | HTTP port (default `10000` for Render) |
 | `ALLOW_ORIGINS` | No | CORS origins, comma-separated (default `*`) |
 | `DOCS_DISABLED` | No | Set to `1` to hide `/docs` in production |
+| `RESUAI_DB_PATH` | No | SQLite file location (default `../resume_app.db`) |
+| `RESUAI_UPLOAD_DIR` | No | Upload folder (default `../uploads`) |
+
+`backend/.env` is loaded automatically at startup (python-dotenv); real environment variables take precedence.
 
 Generate a secure `RESUAI_SECRET`:
 ```bash
@@ -115,14 +129,20 @@ resumeai/
     ├── package.json
     ├── next.config.js
     └── src/
-        ├── app/              ← Next.js pages
-        ├── components/       ← Navbar, Logo, DownloadGate
+        ├── app/              ← pages: / (home), builder, enhance, ats, history (library), login, signup
+        ├── components/
+        │   ├── AppShell.tsx      ← black rail, topbar, mobile tab bar
+        │   ├── ResumeSheet.tsx   ← resume page renderer + tracked-changes view + keyword highlighter
+        │   ├── ATSReport.tsx     ← score report (shared by ATS page and library)
+        │   ├── DownloadGate.tsx  ← Word / PDF / Text buttons + sign-in prompt
+        │   └── ui.tsx            ← form controls, stepper, segmented meter
         ├── lib/
-        │   ├── api.ts        ← all API calls
-        │   └── AuthContext.tsx
+        │   ├── api.ts        ← all API calls (typed, auth-aware, blob downloads)
+        │   ├── AuthContext.tsx
+        │   ├── diff.ts       ← line + word diff for the Enhancer
+        │   └── draft.ts      ← live draft preview for the Builder
         └── styles/
-            └── globals.css
-```
+            └── globals.css   ← design tokens + component styles
 
 ---
 

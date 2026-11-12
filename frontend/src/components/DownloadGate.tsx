@@ -1,140 +1,87 @@
 "use client";
-import { useRouter, usePathname } from "next/navigation";
-import { Lock, ArrowRight, X } from "lucide-react";
-import { useAuth } from "@/lib/AuthContext";
-import { useState } from "react";
+import { usePathname } from "next/navigation";
+import { ArrowRight, Download, Lock, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
+import toast from "react-hot-toast";
+import { useAuth } from "@/lib/AuthContext";
+import type { Fmt } from "@/lib/api";
+import { Spinner } from "@/components/ui";
 
 interface Props {
   attemptId: number | null;
-  onDownload: (format: "docx" | "pdf" | "txt") => void;
-  label?: string;
+  onDownload: (format: Fmt) => Promise<void> | void;
 }
 
+const FORMATS: { fmt: Fmt; label: string; ext: string }[] = [
+  { fmt: "docx", label: "Word",  ext: ".docx" },
+  { fmt: "pdf",  label: "PDF",   ext: ".pdf" },
+  { fmt: "txt",  label: "Text",  ext: ".txt" },
+];
+
 /**
- * Wraps download buttons. If the user is not logged in, shows a modal
- * prompting them to sign in / sign up rather than immediately downloading.
+ * Download buttons. Signed-out visitors get a sign-in prompt instead of a file;
+ * signed-in users get the file through an authenticated fetch (see api.downloadFile).
  */
-export default function DownloadGate({ attemptId, onDownload, label = "Download Resume" }: Props) {
+export default function DownloadGate({ attemptId, onDownload }: Props) {
   const { user } = useAuth();
   const pathname = usePathname();
   const [modal, setModal] = useState(false);
+  const [busy, setBusy] = useState<Fmt | null>(null);
 
-  function handleClick() {
+  useEffect(() => {
+    if (!modal) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setModal(false); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [modal]);
+
+  async function go(fmt: Fmt) {
     if (!user) { setModal(true); return; }
-    // Default to DOCX if user just clicks the main button
-    if (attemptId) onDownload("docx");
+    if (!attemptId || busy) return;
+    setBusy(fmt);
+    try { await onDownload(fmt); }
+    catch (e: any) { toast.error(e.message || "Download failed"); }
+    finally { setBusy(null); }
   }
 
-  const redirectUrl = encodeURIComponent(pathname);
+  const redirect = encodeURIComponent(pathname || "/");
 
   return (
     <>
-      {/* Main download button */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
-        {(["docx", "pdf"] as const).map(fmt => (
-          <button
-            key={fmt}
-            onClick={() => {
-              if (!user) { setModal(true); return; }
-              if (attemptId) onDownload(fmt);
-            }}
-            className="btn-primary"
-            disabled={!attemptId}
-            style={{
-              padding: "10px 14px",
-              fontSize: 13,
-              display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-              background: fmt === "pdf" ? "linear-gradient(135deg, #0EA5E9, #0284C7)" : undefined,
-            }}
-          >
-            {!user && <Lock size={13} />}
-            {fmt === "docx" ? "Word (.docx)" : "PDF (.pdf)"}
+      <div style={{ display: "inline-flex", gap: 6 }} role="group" aria-label="Download">
+        {FORMATS.map(({ fmt, label, ext }) => (
+          <button key={fmt} onClick={() => go(fmt)} disabled={!attemptId || !!busy}
+            className={`btn btn-sm ${fmt === "docx" ? "btn-ink" : "btn-line"}`}
+            aria-label={`Download as ${label} ${ext}`}>
+            {busy === fmt ? <Spinner /> : user ? <Download size={14} /> : <Lock size={13} />} {label}
           </button>
         ))}
       </div>
-      <button
-        onClick={() => { if (!user) { setModal(true); return; } if (attemptId) onDownload("txt"); }}
-        className="btn-ghost"
-        disabled={!attemptId}
-        style={{ width: "100%", padding: "9px", fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 5 }}
-      >
-        {!user && <Lock size={12} />} Plain Text (.txt)
-      </button>
 
-      {/* Login required notice */}
-      {!user && (
-        <div style={{ marginTop: 10, padding: "8px 12px", background: "rgba(245,158,11,0.07)", border: "1px solid rgba(245,158,11,0.15)", borderRadius: 8, fontSize: 12, color: "#FCD34D", display: "flex", alignItems: "center", gap: 6 }}>
-          <Lock size={11} /> Sign in required to download
-        </div>
-      )}
-
-      {/* Modal */}
-      {modal && (
-        <div
-          style={{
-            position: "fixed", inset: 0, zIndex: 1000,
-            background: "rgba(4,11,20,0.85)", backdropFilter: "blur(8px)",
-            display: "flex", alignItems: "center", justifyContent: "center", padding: 24,
-          }}
-          onClick={e => { if (e.target === e.currentTarget) setModal(false); }}
-        >
-          <div style={{
-            background: "#080F1C",
-            border: "1px solid rgba(255,255,255,0.08)",
-            borderRadius: 18,
-            padding: "36px 32px",
-            width: "100%", maxWidth: 400,
-            boxShadow: "0 20px 60px rgba(0,0,0,0.6), 0 0 0 1px rgba(0,200,150,0.06) inset",
-            position: "relative",
-          }}>
-            {/* Close */}
-            <button onClick={() => setModal(false)} style={{ position: "absolute", top: 16, right: 16, background: "none", border: "none", cursor: "pointer", padding: 4 }}>
-              <X size={18} color="#3D5270" />
+      {modal && createPortal(
+        <div className="modal-back" role="dialog" aria-modal="true" aria-labelledby="gate-title"
+          onClick={e => { if (e.target === e.currentTarget) setModal(false); }}>
+          <div className="modal">
+            <button onClick={() => setModal(false)} aria-label="Close" className="btn btn-quiet btn-sm" style={{ position: "absolute", top: 12, right: 12, width: 32, padding: 0 }}>
+              <X size={18} />
             </button>
-
-            {/* Icon */}
-            <div style={{
-              width: 52, height: 52, borderRadius: 14,
-              background: "rgba(245,158,11,0.1)",
-              border: "1px solid rgba(245,158,11,0.2)",
-              display: "flex", alignItems: "center", justifyContent: "center",
-              marginBottom: 20,
-            }}>
-              <Lock size={22} color="#F59E0B" />
-            </div>
-
-            <h2 style={{ fontSize: 20, fontWeight: 800, color: "#E8EEF8", letterSpacing: "-0.02em", marginBottom: 10 }}>
-              Sign in to download
-            </h2>
-            <p style={{ fontSize: 14, color: "#7A8BA8", lineHeight: 1.65, marginBottom: 28 }}>
-              Create a free account to download your resume as DOCX or PDF, and access it anytime from your dashboard.
+            <h2 id="gate-title" className="display" style={{ fontSize: 56, margin: "6px 0 14px" }}>Sign in to download</h2>
+            <p style={{ color: "var(--ink-2)", marginBottom: 22 }}>
+              Your resume is ready and saved to this session. A free account lets you download it as Word or PDF and find it again in your library.
             </p>
-
-            {/* Perks */}
-            <div style={{ marginBottom: 24, display: "flex", flexDirection: "column", gap: 8 }}>
-              {["Download as DOCX & PDF", "Save resumes to your account", "Access history anytime", "100% free, no credit card"].map(p => (
-                <div key={p} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "#7A8BA8" }}>
-                  <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#00C896", flexShrink: 0 }} />
-                  {p}
-                </div>
-              ))}
-            </div>
-
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              <Link href={`/signup?redirect=${redirectUrl}`} onClick={() => setModal(false)}>
-                <button className="btn-primary" style={{ width: "100%", padding: "13px", fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
-                  Create Free Account <ArrowRight size={14} />
-                </button>
+            <div style={{ display: "grid", gap: 10 }}>
+              <Link href={`/signup?redirect=${redirect}`} className="btn btn-blue btn-lg btn-block" onClick={() => setModal(false)}>
+                Create a free account <ArrowRight size={16} />
               </Link>
-              <Link href={`/login?redirect=${redirectUrl}`} onClick={() => setModal(false)}>
-                <button className="btn-ghost" style={{ width: "100%", padding: "12px", fontSize: 14 }}>
-                  Already have an account? Sign In
-                </button>
+              <Link href={`/login?redirect=${redirect}`} className="btn btn-line btn-block" onClick={() => setModal(false)}>
+                I already have one
               </Link>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </>
   );

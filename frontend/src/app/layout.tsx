@@ -1,40 +1,35 @@
 import type { Metadata } from "next";
+import { Archivo, Carlito } from "next/font/google";
 import { Toaster } from "react-hot-toast";
 import { AuthProvider } from "@/lib/AuthContext";
 import "../styles/globals.css";
 
+// One variable family does everything: normal width for the interface, ultra-condensed for display type.
+const ui = Archivo({ subsets: ["latin"], axes: ["wdth"], variable: "--font-ui", display: "swap" });
+// The resume itself is set in Calibri's metric twin, so the preview matches the exported Word file.
+const doc = Carlito({ subsets: ["latin"], weight: ["400", "700"], style: ["normal", "italic"], variable: "--font-doc", display: "swap" });
+
 export const metadata: Metadata = {
-  title: "ResUAI — Build Resumes That Get You Hired",
-  description: "AI-powered resume creation, enhancement, and ATS scoring. Generate professional DOCX & PDF resumes in seconds — free, no sign-up required.",
+  title: "ResUAI — resumes without the filler",
+  description: "Write a resume, see every change the AI makes, and score it against a job ad. Export clean Word and PDF files.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" suppressHydrationWarning>
-      <head>
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link
-          href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap"
-          rel="stylesheet"
-        />
-      </head>
+    <html lang="en" className={`${ui.variable} ${doc.variable}`} suppressHydrationWarning>
       <body>
         <AuthProvider>
           <Toaster
-            position="top-right"
+            position="bottom-right"
             toastOptions={{
+              duration: 4000,
               style: {
-                background: "#080F1C",
-                color: "#E8EEF8",
-                border: "1px solid #162034",
-                fontSize: "13px",
-                fontFamily: "Inter, sans-serif",
-                borderRadius: "10px",
+                background: "#0A0A0F", color: "#fff", borderRadius: "4px", borderLeft: "4px solid #2340F5",
+                fontSize: "14px", fontWeight: 600, fontFamily: "var(--font-ui), system-ui, sans-serif", padding: "11px 14px",
               },
-              success: { iconTheme: { primary: "#00C896", secondary: "#040B14" } },
-              error:   { iconTheme: { primary: "#F87171", secondary: "#040B14" } },
-              loading: { iconTheme: { primary: "#0EA5E9", secondary: "#040B14" } },
+              success: { iconTheme: { primary: "#FFE94A", secondary: "#0A0A0F" } },
+              error:   { iconTheme: { primary: "#FF6B63", secondary: "#0A0A0F" } },
+              loading: { iconTheme: { primary: "#ffffff", secondary: "#0A0A0F" } },
             }}
           />
           {children}

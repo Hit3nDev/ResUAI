@@ -109,12 +109,16 @@ Output ONLY the complete resume as clean plain text. No commentary before or aft
     return _chat(api_key, prompt, max_tokens=2200)
 
 
-def enhance_resume(api_key: str, resume_text: str, job_title: str = "", job_description: str = "") -> str:
+def enhance_resume(api_key: str, resume_text: str, job_title: str = "", job_description: str = "",
+                   focus: list = None) -> str:
     context = ""
     if job_title:
         context += f"\nTarget Job Title: {job_title}"
     if job_description:
         context += f"\nTarget Job Description (align language to this):\n{job_description[:2000]}"
+    focus = [f.strip() for f in (focus or []) if isinstance(f, str) and f.strip()]
+    if focus:
+        context += "\n\nFOCUS AREAS (prioritise these improvements):\n" + "\n".join(f"- {f}" for f in focus)
 
     prompt = f"""You are an expert professional resume writer and career coach.
 Enhance the following resume to make it more impactful, professional, and ATS-friendly.
@@ -185,7 +189,10 @@ Rules:
     match = re.search(r'\{.*\}', raw, re.DOTALL)
     if match:
         raw = match.group(0)
-    return json.loads(raw)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"AI returned malformed ATS JSON: {exc}") from exc
 
 
 def generate_cover_letter(api_key: str, resume_text: str, job_description: str,

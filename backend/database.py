@@ -1,12 +1,13 @@
 import sqlite3
 import json
 import os
-import shutil
+import re
 from datetime import datetime
 
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
-DB_PATH    = os.path.normpath(os.path.join(BASE_DIR, "..", "resume_app.db"))
-UPLOAD_DIR = os.path.normpath(os.path.join(BASE_DIR, "..", "uploads"))
+import config  # noqa: F401  (loads backend/.env so overrides below are honoured)
+DB_PATH    = os.environ.get("RESUAI_DB_PATH") or os.path.normpath(os.path.join(BASE_DIR, "..", "resume_app.db"))
+UPLOAD_DIR = os.environ.get("RESUAI_UPLOAD_DIR") or os.path.normpath(os.path.join(BASE_DIR, "..", "uploads"))
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
@@ -89,6 +90,7 @@ def delete_attempt(attempt_id):
         _delete_file_from_disk(f["stored_name"])
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
+    c.execute("DELETE FROM files WHERE attempt_id = ?", (attempt_id,))
     c.execute("DELETE FROM attempts WHERE id = ?", (attempt_id,))
     conn.commit()
     conn.close()
@@ -130,7 +132,8 @@ def save_file(file_bytes: bytes, original_filename: str, file_type: str,
               purpose: str = "upload", attempt_id: int = None) -> dict:
     """Save a file to disk and record it in the DB. Returns file record."""
     ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    ext = os.path.splitext(original_filename)[1].lower()
+    ext = re.sub(r"[^a-z0-9.]", "", os.path.splitext(original_filename or "")[1].lower())[:10]
+    purpose = re.sub(r"[^A-Za-z0-9_\-]", "_", purpose or "upload")[:40] or "upload"
     stored_name = f"{ts}_{purpose}{ext}"
     file_path   = os.path.join(UPLOAD_DIR, stored_name)
 
@@ -157,7 +160,7 @@ def save_output_file(content: str, filename: str, attempt_id: int = None) -> dic
     return save_file(file_bytes, filename, "text/plain", purpose="output", attempt_id=attempt_id)
 
 
-def get_file_bytes(stored_name: str) -> bytes | None:
+def get_file_bytes(stored_name: str):
     path = os.path.join(UPLOAD_DIR, stored_name)
     if os.path.exists(path):
         with open(path, "rb") as fh:
@@ -173,6 +176,16 @@ def get_all_files():
     conn.close()
     cols = ["id","filename","stored_name","file_type","file_size","purpose","attempt_id","timestamp"]
     return [dict(zip(cols, r)) for r in rows]
+
+
+def get_file_by_id(file_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT * FROM files WHERE id = ?", (file_id,))
+    row = c.fetchone()
+    conn.close()
+    cols = ["id","filename","stored_name","file_type","file_size","purpose","attempt_id","timestamp"]
+    return dict(zip(cols, row)) if row else None
 
 
 def get_files_for_attempt(attempt_id: int):

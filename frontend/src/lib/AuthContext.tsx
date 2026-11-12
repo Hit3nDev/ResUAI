@@ -1,5 +1,6 @@
 "use client";
-import { createContext, useContext, useEffect, useState, ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, ReactNode } from "react";
+import { authMe } from "@/lib/api";
 
 interface User { id: string; email: string }
 interface AuthCtx {
@@ -15,38 +16,53 @@ const AuthContext = createContext<AuthCtx>({
   login: () => {}, logout: () => {},
 });
 
+const TOKEN_KEY = "resuai_token";
+const USER_KEY  = "resuai_user";
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user,    setUser]    = useState<User | null>(null);
   const [token,   setToken]   = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Hydrate from localStorage on mount
-  useEffect(() => {
-    try {
-      const t = localStorage.getItem("resuai_token");
-      const u = localStorage.getItem("resuai_user");
-      if (t && u) { setToken(t); setUser(JSON.parse(u)); }
-    } catch {}
-    setLoading(false);
+  const logout = useCallback(() => {
+    setToken(null); setUser(null);
+    try { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USER_KEY); } catch {}
   }, []);
 
-  function login(t: string, u: User) {
+  const login = useCallback((t: string, u: User) => {
     setToken(t); setUser(u);
-    localStorage.setItem("resuai_token", t);
-    localStorage.setItem("resuai_user",  JSON.stringify(u));
-  }
+    try { localStorage.setItem(TOKEN_KEY, t); localStorage.setItem(USER_KEY, JSON.stringify(u)); } catch {}
+  }, []);
 
-  function logout() {
-    setToken(null); setUser(null);
-    localStorage.removeItem("resuai_token");
-    localStorage.removeItem("resuai_user");
-  }
+  // Hydrate from localStorage, then confirm the token is still valid server-side
+  // (tokens expire after 72h — without this a stale token would look "logged in").
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      let t: string | null = null;
+      try {
+        t = localStorage.getItem(TOKEN_KEY);
+        const u = localStorage.getItem(USER_KEY);
+        if (t && u) { setToken(t); setUser(JSON.parse(u)); }
+        else t = null;
+      } catch { t = null; }
 
-  return (
-    <AuthContext.Provider value={{ user, token, loading, login, logout }}>
-      {children}
-    </AuthContext.Provider>
-  );
+      if (t) {
+        try {
+          const me = await authMe();
+          if (!cancelled) setUser({ id: me.id, email: me.email });
+        } catch (e: any) {
+          // Only drop the session when the server explicitly rejects it, not when it's merely offline.
+          if (!cancelled && e?.status === 401) logout();
+        }
+      }
+      if (!cancelled) setLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [logout]);
+
+  const value = useMemo(() => ({ user, token, loading, login, logout }), [user, token, loading, login, logout]);
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export const useAuth = () => useContext(AuthContext);

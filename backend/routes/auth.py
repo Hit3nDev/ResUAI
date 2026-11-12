@@ -6,6 +6,7 @@ FIXED: explicit step-by-step login checks, no combined short-circuit.
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, field_validator
 import re, sys, os
+from typing import Optional
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from auth import (
@@ -21,6 +22,9 @@ from auth import (
 
 router = APIRouter()
 
+# Pragmatic email check: local@domain.tld — allows subdomains, plus-addressing, hyphens, etc.
+_EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s.]+(?:\.[^@\s.]+)*\.[A-Za-z]{2,}$')
+
 
 # ── Pydantic models ───────────────────────────────────────────────────────────
 
@@ -33,7 +37,7 @@ class SignupRequest(BaseModel):
     @classmethod
     def validate_email(cls, v: str) -> str:
         v = v.lower().strip()
-        if not re.match(r'^[\w\.\+\-]+@[\w\-]+\.[a-zA-Z]{2,}$', v):
+        if len(v) > 254 or not _EMAIL_RE.match(v):
             raise ValueError("Please enter a valid email address.")
         return v
 
@@ -42,6 +46,8 @@ class SignupRequest(BaseModel):
     def validate_password(cls, v: str) -> str:
         if len(v) < 8:
             raise ValueError("Password must be at least 8 characters.")
+        if len(v.encode("utf-8")) > 72:   # bcrypt hard limit
+            raise ValueError("Password must be at most 72 bytes.")
         return v
 
     @field_validator("confirm_password")
@@ -58,7 +64,7 @@ class LoginRequest(BaseModel):
 
 
 class SaveResumeRequest(BaseModel):
-    attempt_id: int
+    attempt_id: Optional[int] = None
     title: str
     resume_text: str
 

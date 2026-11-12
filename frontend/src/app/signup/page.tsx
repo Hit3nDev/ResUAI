@@ -1,203 +1,105 @@
 "use client";
-import { Suspense } from "react";
-import { useState, useEffect } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Eye, EyeOff, ArrowRight, Mail, Lock, CheckCircle } from "lucide-react";
-import { useAuth } from "@/lib/AuthContext";
-import { authSignup } from "@/lib/api";
-import Logo from "@/components/Logo";
+import { ArrowRight, Eye, EyeOff } from "lucide-react";
 import toast from "react-hot-toast";
+import AuthShell from "@/components/AuthShell";
+import { Field, Spinner } from "@/components/ui";
+import { useAuth } from "@/lib/AuthContext";
+import { authSignup, safeRedirect } from "@/lib/api";
 
-const PERKS = [
-  "Download resumes as DOCX & PDF",
-  "Save & edit resumes anytime",
-  "Full session history",
-  "ATS score tracking",
-];
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
-export default function SignupPage() {
-  return (
-    <Suspense>
-      <SignupPageInner />
-    </Suspense>
-  );
+function strength(pw: string) {
+  if (!pw) return { n: 0, label: "", color: "var(--line)" };
+  if (pw.length < 8) return { n: 1, label: "Too short. Use at least 8 characters.", color: "var(--bad)" };
+  let s = 1;
+  if (pw.length >= 12) s++;
+  if (/[a-z]/.test(pw) && /[A-Z]/.test(pw)) s++;
+  if (/\d/.test(pw) && /[^A-Za-z0-9]/.test(pw)) s++;
+  return [
+    { n: 1, label: "Okay", color: "var(--warn)" }, { n: 2, label: "Okay", color: "var(--warn)" },
+    { n: 3, label: "Good", color: "var(--ok)" },   { n: 4, label: "Strong", color: "var(--ok)" },
+  ][s - 1];
 }
 
-function SignupPageInner() {
-  const router       = useRouter();
-  const searchParams = useSearchParams();
+export default function SignupPage() {
+  return <Suspense><SignupInner /></Suspense>;
+}
+
+function SignupInner() {
+  const router = useRouter();
+  const params = useSearchParams();
   const { login, user, loading } = useAuth();
-  const redirect = searchParams.get("redirect") || "/";
+  const redirect = safeRedirect(params.get("redirect"));
 
-  const [email,    setEmail]    = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [confirm,  setConfirm]  = useState("");
-  const [showPw,   setShowPw]   = useState(false);
-  const [busy,     setBusy]     = useState(false);
+  const [confirm, setConfirm] = useState("");
+  const [show, setShow] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [errors, setErrors] = useState<{ email?: string; password?: string; confirm?: string; form?: string }>({});
 
-  useEffect(() => { if (!loading && user) router.replace(redirect); }, [user, loading]);
+  useEffect(() => { if (!loading && user) router.replace(redirect); }, [user, loading, redirect, router]);
 
-  const pwStrength = password.length >= 12 ? "strong" : password.length >= 8 ? "good" : password.length > 0 ? "weak" : "";
-  const strengthColor = { strong: "#00C896", good: "#0EA5E9", weak: "#F59E0B", "": "transparent" }[pwStrength];
-  const strengthWidth = { strong: "100%", good: "66%", weak: "33%", "": "0%" }[pwStrength];
+  const st = strength(password);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (password !== confirm) { toast.error("Passwords do not match"); return; }
-    if (password.length < 8)  { toast.error("Password must be at least 8 characters"); return; }
+    const er: typeof errors = {};
+    if (!EMAIL_RE.test(email.trim())) er.email = "Enter a valid email address.";
+    if (password.length < 8) er.password = "Use at least 8 characters.";
+    if (confirm !== password) er.confirm = "The passwords don’t match.";
+    setErrors(er);
+    if (Object.keys(er).length) return;
+
     setBusy(true);
     try {
-      const res = await authSignup(email, password, confirm);
+      const res = await authSignup(email.trim(), password, confirm);
       login(res.access_token, res.user);
-      toast.success("Account created! Welcome to ResUAI.");
+      toast.success("Account created. Welcome to ResUAI.");
       router.replace(redirect);
     } catch (err: any) {
-      toast.error(err.message || "Signup failed");
-    } finally {
-      setBusy(false);
-    }
+      setErrors({ form: err.message || "Couldn’t create the account." });
+    } finally { setBusy(false); }
   }
 
   return (
-    <div style={{
-      minHeight: "100vh",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      background: "#040B14",
-      backgroundImage: "radial-gradient(ellipse at 20% 30%, rgba(0,200,150,0.07) 0%, transparent 55%), radial-gradient(ellipse at 80% 70%, rgba(14,165,233,0.06) 0%, transparent 55%)",
-      padding: "24px",
-    }}>
-      <div style={{ width: "100%", maxWidth: 460 }}>
-        {/* Logo */}
-        <div style={{ display: "flex", justifyContent: "center", marginBottom: 32 }}>
-          <Link href="/"><Logo size={30} /></Link>
-        </div>
+    <AuthShell title="Sign up" lede="Free, no card. You can download Word and PDF files straight away."
+      footer={<>Already have an account? <Link className="link" href={`/login?redirect=${encodeURIComponent(redirect)}`}>Sign in</Link></>}>
+      <form onSubmit={submit} noValidate className="col" style={{ gap: 18 }}>
+        <Field label="Email" type="email" value={email} onChange={setEmail} placeholder="you@example.com" autoComplete="email" error={errors.email} />
 
-        {/* Card */}
-        <div style={{
-          background: "#080F1C",
-          border: "1px solid rgba(255,255,255,0.07)",
-          borderRadius: 18,
-          padding: "36px 32px",
-          boxShadow: "0 8px 40px rgba(0,0,0,0.5), 0 0 0 1px rgba(0,200,150,0.05) inset",
-        }}>
-          {/* Header */}
-          <div style={{ marginBottom: 24 }}>
-            <h1 style={{ fontSize: 22, fontWeight: 800, color: "#E8EEF8", letterSpacing: "-0.025em", marginBottom: 6 }}>
-              Create your account
-            </h1>
-            <p style={{ fontSize: 14, color: "#7A8BA8" }}>
-              Free forever. No credit card required.
-            </p>
-          </div>
-
-          {/* Perks */}
-          <div style={{
-            display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8,
-            marginBottom: 24, padding: "14px",
-            background: "rgba(0,200,150,0.04)",
-            border: "1px solid rgba(0,200,150,0.1)",
-            borderRadius: 10,
-          }}>
-            {PERKS.map(p => (
-              <div key={p} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#7A8BA8" }}>
-                <CheckCircle size={12} color="#00C896" style={{ flexShrink: 0 }} />
-                {p}
-              </div>
-            ))}
-          </div>
-
-          <form onSubmit={submit}>
-            {/* Email */}
-            <div style={{ marginBottom: 14 }}>
-              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: "#7A8BA8", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8 }}>
-                Email
-              </label>
-              <div style={{ position: "relative" }}>
-                <Mail size={15} color="#3D5270" style={{ position: "absolute", left: 13, top: "50%", transform: "translateY(-50%)", pointerEvents: "none" }} />
-                <input type="email" className="field" value={email}
-                  onChange={e => setEmail(e.target.value)}
-                  placeholder="you@example.com" style={{ paddingLeft: 38 }}
-                  autoComplete="email" required />
-              </div>
-            </div>
-
-            {/* Password */}
-            <div style={{ marginBottom: 8 }}>
-              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: "#7A8BA8", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8 }}>
-                Password
-              </label>
-              <div style={{ position: "relative" }}>
-                <Lock size={15} color="#3D5270" style={{ position: "absolute", left: 13, top: "50%", transform: "translateY(-50%)", pointerEvents: "none" }} />
-                <input type={showPw ? "text" : "password"} className="field" value={password}
-                  onChange={e => setPassword(e.target.value)}
-                  placeholder="Min. 8 characters" style={{ paddingLeft: 38, paddingRight: 42 }}
-                  autoComplete="new-password" required />
-                <button type="button" onClick={() => setShowPw(p => !p)}
-                  style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", padding: 2 }}>
-                  {showPw ? <EyeOff size={15} color="#3D5270" /> : <Eye size={15} color="#3D5270" />}
-                </button>
-              </div>
-            </div>
-
-            {/* Strength bar */}
-            {password && (
-              <div style={{ marginBottom: 14 }}>
-                <div style={{ height: 3, background: "#0C1525", borderRadius: 100, overflow: "hidden" }}>
-                  <div style={{ height: "100%", width: strengthWidth, background: strengthColor, borderRadius: 100, transition: "width 0.3s ease" }} />
-                </div>
-                <div style={{ fontSize: 11, color: strengthColor, marginTop: 4, fontWeight: 600 }}>
-                  {pwStrength === "strong" ? "Strong password" : pwStrength === "good" ? "Good password" : "Weak — use 8+ characters"}
-                </div>
-              </div>
-            )}
-
-            {/* Confirm password */}
-            <div style={{ marginBottom: 24 }}>
-              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: "#7A8BA8", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8 }}>
-                Confirm Password
-              </label>
-              <div style={{ position: "relative" }}>
-                <Lock size={15} color="#3D5270" style={{ position: "absolute", left: 13, top: "50%", transform: "translateY(-50%)", pointerEvents: "none" }} />
-                <input type="password" className="field" value={confirm}
-                  onChange={e => setConfirm(e.target.value)}
-                  placeholder="Re-enter password" style={{
-                    paddingLeft: 38,
-                    borderColor: confirm && confirm !== password ? "rgba(248,113,113,0.5)" : confirm && confirm === password ? "rgba(0,200,150,0.4)" : undefined,
-                  }}
-                  autoComplete="new-password" required />
-                {confirm && confirm === password && (
-                  <CheckCircle size={15} color="#00C896" style={{ position: "absolute", right: 13, top: "50%", transform: "translateY(-50%)" }} />
-                )}
-              </div>
-              {confirm && confirm !== password && (
-                <div style={{ fontSize: 12, color: "#F87171", marginTop: 5 }}>Passwords do not match</div>
-              )}
-            </div>
-
-            {/* Submit */}
-            <button type="submit" className="btn-primary" disabled={busy}
-              style={{ width: "100%", padding: "13px", fontSize: 15, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-              {busy ? <><div className="spinner" /> Creating account…</> : <>Create Account <ArrowRight size={15} /></>}
+        <div>
+          <label className="label" htmlFor="pw">Password</label>
+          <div style={{ position: "relative" }}>
+            <input id="pw" className="input" type={show ? "text" : "password"} value={password} onChange={e => setPassword(e.target.value)}
+              autoComplete="new-password" placeholder="At least 8 characters" style={{ paddingRight: 44 }} aria-invalid={!!errors.password || undefined} />
+            <button type="button" onClick={() => setShow(s => !s)} aria-label={show ? "Hide password" : "Show password"} aria-pressed={show}
+              className="btn btn-quiet btn-sm" style={{ position: "absolute", right: 4, top: 4, width: 32, padding: 0 }}>
+              {show ? <EyeOff size={16} /> : <Eye size={16} />}
             </button>
-          </form>
-
-          {/* Footer */}
-          <div style={{ marginTop: 24, textAlign: "center", fontSize: 13, color: "#3D5270" }}>
-            Already have an account?{" "}
-            <Link href={`/login?redirect=${encodeURIComponent(redirect)}`}
-              style={{ color: "#00C896", fontWeight: 600, textDecoration: "none" }}>
-              Sign in
-            </Link>
           </div>
+          {password && (
+            <div aria-live="polite" style={{ marginTop: 9 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 3 }}>
+                {[1, 2, 3, 4].map(i => <i key={i} style={{ height: 4, background: i <= st.n ? st.color : "var(--line)" }} />)}
+              </div>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: st.color, marginTop: 6 }}>{st.label}</div>
+            </div>
+          )}
+          {errors.password && <div className="err" role="alert">{errors.password}</div>}
         </div>
 
-        <div style={{ textAlign: "center", marginTop: 20 }}>
-          <Link href="/" style={{ fontSize: 13, color: "#3D5270", textDecoration: "none" }}>← Back to ResUAI</Link>
-        </div>
-      </div>
-    </div>
+        <Field label="Confirm password" type={show ? "text" : "password"} value={confirm} onChange={setConfirm} autoComplete="new-password" error={errors.confirm} />
+
+        <div role="alert" aria-live="assertive">{errors.form && <div className="err" style={{ marginTop: 0 }}>{errors.form}</div>}</div>
+
+        <button type="submit" className="btn btn-blue btn-lg btn-block" disabled={busy}>
+          {busy ? <><Spinner /> Creating account…</> : <>Create account <ArrowRight size={16} /></>}
+        </button>
+      </form>
+    </AuthShell>
   );
 }

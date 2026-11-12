@@ -1,156 +1,159 @@
 const BASE = "/api";
+const TOKEN_KEY = "resuai_token";
 
-async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
-  const res = await fetch(BASE + path, {
-    headers: { "Content-Type": "application/json", ...((opts.headers as object) || {}) },
-    ...opts,
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: "Request failed" }));
-    throw new Error(err.detail || "Unknown error");
+export type Fmt = "docx" | "pdf" | "txt";
+
+/* ── helpers ──────────────────────────────────────────────────────────────── */
+
+export function getToken(): string | null {
+  if (typeof window === "undefined") return null;
+  try { return localStorage.getItem(TOKEN_KEY); } catch { return null; }
+}
+
+/** FastAPI sends `detail` as a string, or (422) as a list of {msg, loc}. Make both readable. */
+export function formatDetail(detail: unknown, fallback = "Something went wrong"): string {
+  if (!detail) return fallback;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    const msgs = detail
+      .map((d: any) => {
+        const msg = String(d?.msg ?? d ?? "").replace(/^Value error,\s*/i, "");
+        const field = Array.isArray(d?.loc) ? d.loc[d.loc.length - 1] : "";
+        // Pydantic's "Field required" is meaningless without the field name
+        return /required|missing/i.test(msg) && field ? `${field}: ${msg.toLowerCase()}` : msg;
+      })
+      .filter(Boolean);
+    return msgs.length ? msgs.join(" · ") : fallback;
   }
+  try { return JSON.stringify(detail); } catch { return fallback; }
+}
+
+async function parseError(res: Response): Promise<Error> {
+  let detail: unknown;
+  try { detail = (await res.json())?.detail; } catch { /* non-JSON body */ }
+  const fallback =
+    res.status === 502 || res.status === 503 || res.status === 504
+      ? "The server isn't reachable right now. Is the backend running?"
+      : `Request failed (${res.status})`;
+  const err: Error & { status?: number } = new Error(formatDetail(detail, fallback));
+  err.status = res.status;
+  return err;
+}
+
+async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
+  const headers = new Headers(opts.headers);
+  const token = getToken();
+  if (token && !headers.has("Authorization")) headers.set("Authorization", `Bearer ${token}`);
+  if (opts.body && !(opts.body instanceof FormData) && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+  let res: Response;
+  try {
+    res = await fetch(BASE + path, { ...opts, headers });
+  } catch {
+    throw new Error("Can't reach the server. Check that the backend is running.");
+  }
+  if (!res.ok) throw await parseError(res);
   return res.json();
 }
 
-// ── Resume Builder ──────────────────────────────────────────────────────────────
-export async function createResume(data: object) {
-  return req<{
-    resume_text: string; cover_letter?: string;
-    attempt_id: number; word_count: number; char_count: number;
-  }>("/resume/create", { method: "POST", body: JSON.stringify(data) });
+const json = (body: unknown): RequestInit => ({ method: "POST", body: JSON.stringify(body) });
+
+/** Fetch a file with the user's token and hand it to the browser as a download. */
+export async function downloadFile(path: string, fallbackName: string) {
+  const headers = new Headers();
+  const token = getToken();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  let res: Response;
+  try {
+    res = await fetch(BASE + path, { headers });
+  } catch {
+    throw new Error("Can't reach the server. Check that the backend is running.");
+  }
+  if (!res.ok) throw await parseError(res);
+  const cd = res.headers.get("Content-Disposition") || "";
+  const m = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(cd);
+  const name = m ? decodeURIComponent(m[1]) : fallbackName;
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
-export function downloadResume(attemptId: number, format: "docx" | "pdf" | "txt") {
-  window.open(`${BASE}/resume/download/${attemptId}/${format}`, "_blank");
-}
+/* ── Types ────────────────────────────────────────────────────────────────── */
 
-// ── Enhance ───────────────────────────────────────────────────────────────────
-export async function enhanceText(data: object) {
-  return req<{
-    enhanced_text: string; original_text?: string;
-    attempt_id: number; original_word_count: number; enhanced_word_count: number;
-    cover_letter?: string;
-  }>("/enhance/text", { method: "POST", body: JSON.stringify(data) });
+export interface CreateResult {
+  resume_text: string; cover_letter?: string | null;
+  attempt_id: number; word_count: number; char_count: number;
 }
-
-export async function enhanceFile(file: File, jobTitle = "", jobDescription = "") {
-  const fd = new FormData();
-  fd.append("file", file);
-  fd.append("job_title", jobTitle);
-  fd.append("job_description", jobDescription);
-  const res = await fetch(`${BASE}/enhance/upload`, { method: "POST", body: fd });
-  if (!res.ok) { const e = await res.json(); throw new Error(e.detail); }
-  return res.json();
+export interface EnhanceResult {
+  enhanced_text: string; original_text?: string; cover_letter?: string | null;
+  attempt_id: number; original_word_count: number; enhanced_word_count: number;
 }
-
-export function downloadEnhanced(attemptId: number, format: "docx" | "pdf" | "txt") {
-  window.open(`${BASE}/enhance/download/${attemptId}/${format}`, "_blank");
+export interface ATSResult {
+  overall_score: number; keyword_score: number; format_score: number; relevance_score: number;
+  matched_keywords: string[]; missing_keywords: string[];
+  strengths: string[]; improvements: string[];
+  section_scores?: Record<string, number>; verdict: string; attempt_id: number;
 }
-
-// ── ATS ───────────────────────────────────────────────────────────────────────
-export async function analyzeATS(resumeText: string, jobDescription: string) {
-  return req<{
-    overall_score: number; keyword_score: number; format_score: number;
-    relevance_score: number; matched_keywords: string[]; missing_keywords: string[];
-    strengths: string[]; improvements: string[];
-    section_scores: Record<string, number>; verdict: string; attempt_id: number;
-  }>("/ats/analyze", { method: "POST", body: JSON.stringify({ resume_text: resumeText, job_description: jobDescription }) });
+export interface Attempt {
+  id: number; feature: string; input_summary: string; output_preview: string;
+  full_output: string; ats_score: number | null; timestamp: string; metadata?: string | null;
 }
-
-export async function analyzeATSFile(resume: File, jdFile?: File, jdText = "") {
-  const fd = new FormData();
-  fd.append("resume", resume);
-  if (jdFile) fd.append("job_description_file", jdFile);
-  fd.append("job_description_text", jdText);
-  const res = await fetch(`${BASE}/ats/upload`, { method: "POST", body: fd });
-  if (!res.ok) { const e = await res.json(); throw new Error(e.detail); }
-  return res.json();
+export interface Stats {
+  total: number; created: number; enhanced: number; ats_checks: number;
+  avg_ats_score: number | null; file_count: number; total_file_size_human?: string;
 }
+export interface SavedResume { id: number; attempt_id: number | null; title: string; resume_data: string; created_at: string }
 
-// ── History ───────────────────────────────────────────────────────────────────
-export async function getHistory() {
-  return req<any[]>("/history/");
-}
+/* ── Health ───────────────────────────────────────────────────────────────── */
+export const getHealth = () => request<{ status: string; version: string }>("/health");
 
-export async function getStats() {
-  return req<Record<string, any>>("/stats");
-}
+/* ── Resume builder ───────────────────────────────────────────────────────── */
+export const createResume = (data: object) => request<CreateResult>("/resume/create", json(data));
+export const downloadResume = (id: number, f: Fmt) => downloadFile(`/resume/download/${id}/${f}`, `Resume.${f}`);
 
-export async function deleteAttempt(id: number) {
-  return req(`/history/${id}`, { method: "DELETE" });
-}
+/* ── Enhance ──────────────────────────────────────────────────────────────── */
+export const enhanceText = (data: object) => request<EnhanceResult>("/enhance/text", json(data));
+export const downloadEnhanced = (id: number, f: Fmt) => downloadFile(`/enhance/download/${id}/${f}`, `Enhanced_Resume.${f}`);
 
-export async function clearHistory() {
-  return req("/history/", { method: "DELETE" });
-}
+/* ── ATS ──────────────────────────────────────────────────────────────────── */
+export const analyzeATS = (resumeText: string, jobDescription: string) =>
+  request<ATSResult>("/ats/analyze", json({ resume_text: resumeText, job_description: jobDescription }));
 
-export function downloadFromHistory(id: number, format: "docx" | "pdf" | "txt") {
-  window.open(`${BASE}/history/${id}/download/${format}`, "_blank");
-}
+/* ── History ──────────────────────────────────────────────────────────────── */
+export const getHistory    = () => request<Attempt[]>("/history");
+export const getStats      = () => request<Stats>("/stats");
+export const deleteAttempt = (id: number) => request(`/history/${id}`, { method: "DELETE" });
+export const clearHistory  = () => request("/history", { method: "DELETE" });
+export const downloadFromHistory = (id: number, f: Fmt) => downloadFile(`/history/${id}/download/${f}`, `session_${id}.${f}`);
 
-// ── Files ─────────────────────────────────────────────────────────────────────
-export async function getFiles() {
-  return req<any[]>("/files/");
-}
-
-export async function deleteFile(id: number) {
-  return req(`/files/${id}`, { method: "DELETE" });
-}
-
+/* ── Files ────────────────────────────────────────────────────────────────── */
 export async function extractText(file: File) {
   const fd = new FormData(); fd.append("file", file);
-  const res = await fetch(`${BASE}/files/extract-text`, { method: "POST", body: fd });
-  if (!res.ok) { const e = await res.json(); throw new Error(e.detail); }
-  return res.json() as Promise<{ text: string; word_count: number; filename: string }>;
+  return request<{ text: string; word_count: number; filename: string }>("/files/extract-text", { method: "POST", body: fd });
 }
 
-// ── Auth ──────────────────────────────────────────────────────────────────────
-function getToken(): string | null {
-  if (typeof window === "undefined") return null;
-  return localStorage.getItem("resuai_token");
+/* ── Auth ─────────────────────────────────────────────────────────────────── */
+type AuthRes = { access_token: string; user: { id: string; email: string } };
+
+export const authSignup = (email: string, password: string, confirmPassword: string) =>
+  request<AuthRes>("/auth/signup", json({ email, password, confirm_password: confirmPassword }));
+export const authLogin = (email: string, password: string) =>
+  request<AuthRes>("/auth/login", json({ email, password }));
+export const authMe = () => request<{ id: string; email: string; created_at: string }>("/auth/me");
+export const saveResumeToAccount = (attemptId: number, title: string, resumeText: string) =>
+  request<{ saved: boolean; resume_id: number }>("/auth/resumes/save", json({ attempt_id: attemptId, title, resume_text: resumeText }));
+export const getMyResumes = () => request<SavedResume[]>("/auth/resumes");
+
+/* ── Misc ─────────────────────────────────────────────────────────────────── */
+
+/** Only allow same-site relative redirects (blocks ?redirect=https://evil.example and //evil.example). */
+export function safeRedirect(target: string | null | undefined, fallback = "/"): string {
+  if (!target || !target.startsWith("/") || target.startsWith("//") || target.startsWith("/\\")) return fallback;
+  return target;
 }
 
-function authHeaders(): Record<string, string> {
-  const t = getToken();
-  return t ? { Authorization: `Bearer ${t}` } : {};
-}
-
-export async function authSignup(email: string, password: string, confirmPassword: string) {
-  return req<{ access_token: string; user: { id: string; email: string } }>(
-    "/auth/signup",
-    { method: "POST", body: JSON.stringify({ email, password, confirm_password: confirmPassword }) }
-  );
-}
-
-export async function authLogin(email: string, password: string) {
-  return req<{ access_token: string; user: { id: string; email: string } }>(
-    "/auth/login",
-    { method: "POST", body: JSON.stringify({ email, password }) }
-  );
-}
-
-export async function authMe() {
-  return req<{ id: string; email: string; created_at: string }>(
-    "/auth/me",
-    { headers: authHeaders() }
-  );
-}
-
-export async function saveResumeToAccount(attemptId: number, title: string, resumeText: string) {
-  return req<{ saved: boolean; resume_id: number }>(
-    "/auth/resumes/save",
-    { method: "POST", body: JSON.stringify({ attempt_id: attemptId, title, resume_text: resumeText }), headers: authHeaders() }
-  );
-}
-
-export async function getMyResumes() {
-  return req<any[]>("/auth/resumes", { headers: authHeaders() });
-}
-
-/** Download with auth token injected (opens download URL). */
-export function downloadWithAuth(url: string) {
-  const token = getToken();
-  if (!token) { window.location.href = `/login?redirect=${encodeURIComponent(window.location.pathname)}`; return; }
-  // Append token as query param so the browser can download
-  window.open(`${url}?token=${token}`, "_blank");
-}
+export const wordCount = (s: string) => (s.trim() ? s.trim().split(/\s+/).length : 0);

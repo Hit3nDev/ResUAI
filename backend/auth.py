@@ -23,12 +23,12 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 # ── Config ─────────────────────────────────────────────────────────────────────
 # SECRET_KEY must be set via RESUAI_SECRET env var.
 # config.py enforces this at startup — no fallback default in production.
-SECRET_KEY         = os.environ.get("RESUAI_SECRET", "")
+from config import RESUAI_SECRET as SECRET_KEY   # config loads backend/.env first
 ALGORITHM          = "HS256"
 TOKEN_EXPIRE_HOURS = 72
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH  = os.path.normpath(os.path.join(BASE_DIR, "..", "resume_app.db"))
+DB_PATH  = os.environ.get("RESUAI_DB_PATH") or os.path.normpath(os.path.join(BASE_DIR, "..", "resume_app.db"))
 
 # ── Password hashing (direct bcrypt — avoids passlib/bcrypt4.x incompatibility) ──
 def hash_password(plain: str) -> str:
@@ -92,24 +92,28 @@ def init_auth_tables():
 def create_user(email: str, password: str) -> dict:
     con = _conn()
     c   = con.cursor()
-    c.execute("SELECT id FROM users WHERE email = ?", (email.lower(),))
+    c.execute("SELECT id FROM users WHERE email = ?", (email.lower().strip(),))
     if c.fetchone():
         con.close()
         raise HTTPException(status_code=409, detail="An account with this email already exists.")
     user_id = str(uuid.uuid4())
     now     = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    c.execute(
-        "INSERT INTO users (id, email, password_hash, created_at) VALUES (?, ?, ?, ?)",
-        (user_id, email.lower(), hash_password(password), now),
-    )
-    con.commit()
-    con.close()
+    try:
+        c.execute(
+            "INSERT INTO users (id, email, password_hash, created_at) VALUES (?, ?, ?, ?)",
+            (user_id, email.lower(), hash_password(password), now),
+        )
+        con.commit()
+    except sqlite3.IntegrityError:   # lost a race with a concurrent signup
+        raise HTTPException(status_code=409, detail="An account with this email already exists.")
+    finally:
+        con.close()
     return {"id": user_id, "email": email.lower(), "created_at": now}
 
 def get_user_by_email(email: str) -> Optional[dict]:
     con = _conn()
     c   = con.cursor()
-    c.execute("SELECT id, email, password_hash, created_at FROM users WHERE email = ?", (email.lower(),))
+    c.execute("SELECT id, email, password_hash, created_at FROM users WHERE email = ?", (email.lower().strip(),))
     row = c.fetchone()
     con.close()
     if row:
@@ -127,7 +131,6 @@ def get_user_by_id(user_id: str) -> Optional[dict]:
     return None
 
 def save_user_resume(user_id: str, attempt_id: int, title: str, resume_data: str) -> int:
-    import json
     con = _conn()
     c   = con.cursor()
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -148,7 +151,7 @@ def get_user_resumes(user_id: str) -> list:
         "FROM user_resumes WHERE user_id = ? ORDER BY created_at DESC",
         (user_id,),
     )
-    rows = con.fetchall() if False else c.fetchall()
+    rows = c.fetchall()
     con.close()
     cols = ["id","user_id","attempt_id","title","resume_data","created_at"]
     return [dict(zip(cols, r)) for r in rows]
@@ -167,7 +170,7 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
     payload = decode_token(creds.credentials)
-    user    = get_user_by_id(payload["sub"])
+    user    = get_user_by_id(payload.get("sub", ""))
     if not user:
         raise HTTPException(status_code=401, detail="User not found.")
     return user
@@ -180,6 +183,6 @@ def get_optional_user(
         return None
     try:
         payload = decode_token(creds.credentials)
-        return get_user_by_id(payload["sub"])
+        return get_user_by_id(payload.get("sub", ""))
     except Exception:
         return None

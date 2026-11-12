@@ -9,6 +9,8 @@ REQUIRED env vars (app refuses to start without them):
   RESUAI_SECRET  — JWT signing secret (random string, min 32 chars)
 
 OPTIONAL env vars:
+  RESUAI_DB_PATH    — SQLite file location (default ../resume_app.db)
+  RESUAI_UPLOAD_DIR — upload folder (default ../uploads)
   PORT           — HTTP port (default 10000 for Render.com)
   ALLOW_ORIGINS  — Comma-separated CORS origins (default *)
 """
@@ -16,13 +18,21 @@ OPTIONAL env vars:
 import os
 import sys
 
+# Load backend/.env (if present) BEFORE reading any variable. Real environment
+# variables always win over the file (override=False).
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"), override=False)
+except ImportError:  # python-dotenv is optional at runtime
+    pass
+
 
 # ── Load values ────────────────────────────────────────────────────────────────
 
 GROQ_API_KEY  = os.environ.get("GROQ_API_KEY", "").strip()
 RESUAI_SECRET = os.environ.get("RESUAI_SECRET", "").strip()
-PORT          = int(os.environ.get("PORT", 10000))
-ALLOW_ORIGINS = [o.strip() for o in os.environ.get("ALLOW_ORIGINS", "*").split(",")]
+PORT          = int(os.environ.get("PORT") or 10000)
+ALLOW_ORIGINS = [o.strip() for o in os.environ.get("ALLOW_ORIGINS", "*").split(",") if o.strip()] or ["*"]
 
 
 # ── Startup validation — fail fast, clear error message ───────────────────────
