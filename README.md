@@ -10,7 +10,7 @@
 ### 1. Backend
 
 ```bash
-cd backend
+cd resumeai/backend
 
 # Install dependencies
 pip install -r requirements.txt
@@ -30,7 +30,7 @@ Docs: http://localhost:8000/docs
 ### 2. Frontend
 
 ```bash
-cd frontend
+cd resumeai/frontend
 
 npm install
 
@@ -86,13 +86,13 @@ python -c "import secrets; print(secrets.token_hex(32))"
 ## Deploy to Render.com
 
 ### Backend
-1. New Web Service → connect repo → select `resumeai/backend`
+1. New Web Service → connect repo → set Root Directory to `backend`
 2. Build command: `pip install -r requirements.txt`
 3. Start command: `python main.py`
 4. Add environment variables in the Render dashboard
 
 ### Frontend
-1. New Web Service or Static Site → select `resumeai/frontend`
+1. New Web Service or Static Site → set Root Directory to `frontend`
 2. Build command: `npm install && npm run build`
 3. Start command: `npm start`
 4. Set `NEXT_PUBLIC_API_URL` to your backend Render URL
@@ -102,7 +102,7 @@ python -c "import secrets; print(secrets.token_hex(32))"
 ## Project Structure
 
 ```
-resumeai/
+ResUAI/
 ├── .gitignore
 ├── README.md
 ├── backend/
